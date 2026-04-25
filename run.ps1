@@ -4,9 +4,30 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# --- Banner ---
+$OutputEncoding = [Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+try { $Host.UI.RawUI.WindowTitle = "Auto-Clipper  -  by uncle_w" } catch {}
+
 Write-Host ""
-Write-Host "  Auto-Clipper local launcher" -ForegroundColor Cyan
-Write-Host "  ===========================" -ForegroundColor Cyan
+Write-Host "   █████╗ ██╗   ██╗████████╗ ██████╗      ██████╗██╗     ██╗██████╗ ██████╗ ███████╗██████╗" -ForegroundColor Magenta
+Write-Host "  ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗    ██╔════╝██║     ██║██╔══██╗██╔══██╗██╔════╝██╔══██╗" -ForegroundColor Magenta
+Write-Host "  ███████║██║   ██║   ██║   ██║   ██║    ██║     ██║     ██║██████╔╝██████╔╝█████╗  ██████╔╝" -ForegroundColor Cyan
+Write-Host "  ██╔══██║██║   ██║   ██║   ██║   ██║    ██║     ██║     ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██╔══██╗" -ForegroundColor Cyan
+Write-Host "  ██║  ██║╚██████╔╝   ██║   ╚██████╔╝    ╚██████╗███████╗██║██║     ██║     ███████╗██║  ██║" -ForegroundColor Blue
+Write-Host "  ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝      ╚═════╝╚══════╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝" -ForegroundColor Blue
+Write-Host ""
+Write-Host "          ┌──────────────────────────────────────────────────────────────┐" -ForegroundColor DarkGray
+Write-Host "          │  " -NoNewline -ForegroundColor DarkGray
+Write-Host "viral short-form clipper" -NoNewline -ForegroundColor White
+Write-Host "  ·  " -NoNewline -ForegroundColor DarkGray
+Write-Host "yt-dlp + whisper + groq + ffmpeg" -NoNewline -ForegroundColor Gray
+Write-Host "  │" -ForegroundColor DarkGray
+Write-Host "          │" -NoNewline -ForegroundColor DarkGray
+Write-Host "                                                  by " -NoNewline -ForegroundColor DarkGray
+Write-Host "uncle_w" -NoNewline -ForegroundColor Yellow
+Write-Host "  🎬  │" -ForegroundColor DarkGray
+Write-Host "          └──────────────────────────────────────────────────────────────┘" -ForegroundColor DarkGray
 Write-Host ""
 
 # --- Pre-flight checks ---
