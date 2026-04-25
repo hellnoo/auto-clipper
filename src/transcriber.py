@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from loguru import logger
 from faster_whisper import WhisperModel
@@ -18,7 +19,21 @@ def get_model() -> WhisperModel:
     return _model
 
 
+def _cache_path(audio_path: str) -> Path:
+    p = Path(audio_path)
+    return p.with_suffix(p.suffix + f".transcript.{config.WHISPER_MODEL}.json")
+
+
 def transcribe(audio_path: str) -> dict:
+    cache = _cache_path(audio_path)
+    if cache.exists():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            logger.success(f"Loaded cached transcript: {cache.name}")
+            return data
+        except Exception as e:
+            logger.warning(f"cache read failed ({e}), retranscribing")
+
     model = get_model()
     logger.info(f"Transcribing {Path(audio_path).name}")
     segments_iter, info = model.transcribe(
@@ -42,12 +57,18 @@ def transcribe(audio_path: str) -> dict:
             "words": seg_words,
         })
     logger.success(f"Transcribed: lang={info.language}, {len(segments)} segments, {len(words_all)} words")
-    return {
+    result = {
         "language": info.language,
         "duration": float(info.duration),
         "segments": segments,
         "words": words_all,
     }
+    try:
+        cache.write_text(json.dumps(result), encoding="utf-8")
+        logger.info(f"cached transcript -> {cache.name}")
+    except Exception as e:
+        logger.warning(f"cache write failed: {e}")
+    return result
 
 
 def to_srt(segments: list[dict]) -> str:

@@ -149,7 +149,33 @@ def _cobalt_fallback(url: str) -> dict:
     }
 
 
+def _existing_for_youtube(url: str) -> dict | None:
+    """If we already have this YouTube video on disk, skip the network entirely."""
+    if not _is_youtube(url):
+        return None
+    vid = _yt_video_id(url)
+    if not vid:
+        return None
+    for ext in ("mp4", "mkv", "webm"):
+        p = config.RAW_DIR / f"{vid}.{ext}"
+        if p.exists() and p.stat().st_size > 1024:
+            duration = _ffprobe_duration(p)
+            logger.success(f"reusing existing download: {p.name} ({duration:.0f}s)")
+            return {
+                "path": str(p),
+                "title": vid,
+                "duration": duration,
+                "id": vid,
+                "url": url,
+            }
+    return None
+
+
 def download(url: str) -> dict:
+    cached = _existing_for_youtube(url)
+    if cached:
+        return cached
+
     logger.info(f"Downloading {url}")
     last_err: Exception | None = None
     for i, extractor_args in enumerate(YT_CLIENT_FALLBACKS):
