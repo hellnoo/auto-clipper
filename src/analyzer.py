@@ -49,21 +49,44 @@ def _condense_segments(segments: list[dict], target_chunk_sec: float = 20.0) -> 
     return out
 
 
-def _build_user_prompt(transcript: dict) -> str:
+def _build_user_prompt(transcript: dict, target_input_tokens: int = 7000) -> str:
+    """Adaptively condense the transcript so the prompt fits the LLM's TPM budget.
+
+    Groq free tier caps at 12000 TPM for llama-3.3-70b. We aim for ~7k input
+    tokens, leaving ~4k for response + system prompt. Roughly 4 chars per token,
+    so target ~28000 chars of transcript.
+    """
     segs = transcript["segments"]
-    # For long transcripts, condense to keep the prompt + response within reasonable token budget.
-    if len(segs) > 300:
-        segs = _condense_segments(segs, target_chunk_sec=20.0)
-    lines = [
+    duration = transcript.get("duration") or (segs[-1]["end"] if segs else 0)
+
+    def render(segs_list):
+        return "\n".join(
+            f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in segs_list
+        )
+
+    target_chars = target_input_tokens * 4
+    body = render(segs)
+    # Try increasingly coarse condensing until we fit.
+    for chunk_sec in (0, 15, 25, 40, 60, 90, 120):
+        if len(body) <= target_chars:
+            break
+        if chunk_sec == 0:
+            continue  # original was already too big
+        condensed = _condense_segments(transcript["segments"], target_chunk_sec=float(chunk_sec))
+        body = render(condensed)
+        segs = condensed
+    if len(body) > target_chars:
+        # Last resort: hard truncate (shouldn't happen for any sane video length).
+        body = body[:target_chars] + "\n[... transcript truncated to fit budget ...]"
+
+    header = [
         f"Language: {transcript['language']}",
-        f"Duration: {transcript['duration']:.1f}s",
-        f"Segments: {len(segs)}",
+        f"Duration: {duration:.1f}s",
+        f"Segments shown: {len(segs)}",
         "",
         "Transcript:",
     ]
-    for seg in segs:
-        lines.append(f"[{seg['start']:.1f}-{seg['end']:.1f}] {seg['text']}")
-    return "\n".join(lines)
+    return "\n".join(header) + "\n" + body
 
 
 def _extract_json(text: str) -> dict:
