@@ -45,7 +45,7 @@ def _resolve_cookies_file() -> str | None:
 
 def _base_opts() -> dict:
     opts: dict = {
-        "format": f"bestvideo[height<={config.VIDEO_QUALITY}]+bestaudio/best[height<={config.VIDEO_QUALITY}]",
+        "format": f"bestvideo[height<={config.VIDEO_QUALITY}]+bestaudio/best[height<={config.VIDEO_QUALITY}]/best",
         "merge_output_format": "mp4",
         "outtmpl": str(config.RAW_DIR / "%(id)s.%(ext)s"),
         "quiet": True,
