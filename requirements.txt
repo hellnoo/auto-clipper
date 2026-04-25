@@ -5,6 +5,7 @@ ollama>=0.3.3
 groq>=0.11.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
 loguru>=0.7.2
 python-dotenv>=1.0.1
 pydantic>=2.7.0

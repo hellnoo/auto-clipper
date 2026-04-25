@@ -1,3 +1,13 @@
+---
+title: Auto Clipper
+emoji: 🎬
+colorFrom: yellow
+colorTo: red
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # auto-clipper
 
 Automate short-form (TikTok/Reels/Shorts) clips from long videos — 100% free, no paid API required.
@@ -137,6 +147,41 @@ python -m src.editor                     # check ffmpeg on PATH
 - **Out of memory with 7B model** — switch to `qwen2.5:3b` or use Groq.
 - **Garbage/empty clips** — bump `WHISPER_MODEL` to `medium` (better transcription = better analysis).
 
+## Deploy to Hugging Face Spaces (free, public URL)
+
+The repo is HF-Spaces-ready (Docker SDK, port 7860). On the free tier you get **2 vCPU / 16GB RAM**, no GPU, ephemeral filesystem — enough for Whisper `small` + ffmpeg, **but not for Ollama 7B**. Force Groq mode.
+
+1. Create a new Space at https://huggingface.co/new-space
+   - **SDK**: Docker
+   - **Hardware**: CPU basic (free)
+2. Push this repo to the Space's git remote (or upload via the web UI).
+3. In the Space's **Settings → Variables and secrets**, add:
+   - `LLM_PROVIDER` = `groq`
+   - `GROQ_API_KEY` = `gsk_...` (from https://console.groq.com)
+   - Optional: `GROQ_MODEL`, `WHISPER_MODEL` (use `base` for faster startup)
+4. Space auto-builds. First boot ~5 min (downloads Whisper model). Open the Space URL → submit a YouTube link.
+
+**Free-tier caveats:**
+- One job at a time (queue is in-memory).
+- Filesystem is ephemeral — clips disappear on restart unless you enable persistent storage (paid).
+- Long videos (>20 min) are slow on 2 vCPU. Use `WHISPER_MODEL=base` if too slow.
+- `OLLAMA_*` vars are ignored when `LLM_PROVIDER=groq`.
+
+## Local Docker (optional)
+
+```bash
+docker build -t auto-clipper .
+docker run --rm -p 7860:7860 \
+  -e LLM_PROVIDER=groq -e GROQ_API_KEY=gsk_... \
+  -v $(pwd)/output:/data/output \
+  auto-clipper
+# open http://localhost:7860
+```
+
+## Web dashboard
+
+Whether running locally (`make dashboard`) or on HF Spaces, the dashboard at `/` has a URL submit form. Jobs run in a background worker, one at a time. The page auto-refreshes every 15s so you can watch status (`pending → downloading → transcribing → analyzing → rendering → done`).
+
 ## Roadmap
 
-MVP ships without auto-upload — clips land in `output/final/`, manual upload from there. Uploaders (TikTok/YouTube/Instagram) are a future addition.
+MVP ships without auto-upload — clips land in `output/final/` (or `/data/output` in container), manual upload from there. Uploaders (TikTok/YouTube/Instagram) are a future addition.
