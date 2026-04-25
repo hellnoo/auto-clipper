@@ -87,32 +87,39 @@ def get_provider() -> LLMProvider:
     raise ValueError(f"unknown LLM_PROVIDER: {p}")
 
 
-def _validate_clips(data: dict, total_duration: float) -> list[dict]:
+def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list[str]]:
     clips = data.get("clips") or []
     valid: list[dict] = []
+    rejected: list[str] = []
+    # Hard floor/ceiling — clamp to source bounds and a sane absolute range
+    abs_min = max(5.0, config.CLIP_MIN_SEC * 0.5)
+    abs_max = min(total_duration, config.CLIP_MAX_SEC * 1.5)
     for c in clips:
         try:
             start = float(c["start"])
             end = float(c["end"])
         except (KeyError, TypeError, ValueError):
+            rejected.append(f"bad-fields:{c!r:.80}")
             continue
-        if end <= start:
+        start = max(0.0, start)
+        end = min(total_duration, end)
+        if end - start <= 0:
+            rejected.append(f"end<=start:{start:.1f}-{end:.1f}")
             continue
         dur = end - start
-        if dur < config.CLIP_MIN_SEC - 2 or dur > config.CLIP_MAX_SEC + 5:
-            continue
-        if start < 0 or end > total_duration + 1:
+        if dur < abs_min or dur > abs_max:
+            rejected.append(f"bad-dur:{dur:.1f}s (allowed {abs_min:.0f}-{abs_max:.0f})")
             continue
         valid.append({
-            "start": max(0.0, start),
-            "end": min(total_duration, end),
+            "start": start,
+            "end": end,
             "hook": str(c.get("hook") or "").strip()[:120],
             "caption": str(c.get("caption") or "").strip(),
             "hashtags": [str(h).lstrip("#").strip() for h in (c.get("hashtags") or []) if h],
             "score": float(c.get("score") or 0),
         })
     valid.sort(key=lambda x: x["score"], reverse=True)
-    return valid[: config.CLIP_COUNT_MAX]
+    return valid[: config.CLIP_COUNT_MAX], rejected
 
 
 def analyze(transcript: dict) -> list[dict]:
@@ -128,22 +135,36 @@ def analyze(transcript: dict) -> list[dict]:
     user = _build_user_prompt(transcript)
 
     last_err: Exception | None = None
+    last_rejected: list[str] = []
     raw = ""
     for attempt in range(1, 4):
         try:
             if attempt == 1:
                 raw = provider.complete(system, user)
             else:
-                fix_user = (
-                    f"Your previous response could not be parsed as JSON. Error: {last_err}\n\n"
-                    f"Previous response:\n{raw[:500]}\n\n"
-                    "Return ONLY valid JSON matching the schema. No markdown. No prose."
-                )
+                if last_rejected:
+                    fix_user = (
+                        f"Your previous response had {len(last_rejected)} clip(s) but none passed validation.\n"
+                        f"Reasons: {last_rejected[:3]}\n\n"
+                        f"Constraints reminder:\n"
+                        f"- Video duration: {transcript['duration']:.1f}s\n"
+                        f"- Each clip MUST be between {config.CLIP_MIN_SEC} and {config.CLIP_MAX_SEC} seconds long.\n"
+                        f"- 'start' and 'end' must be within [0, {transcript['duration']:.1f}] (in seconds).\n\n"
+                        f"Original request:\n{user}"
+                    )
+                else:
+                    fix_user = (
+                        f"Your previous response could not be parsed as JSON. Error: {last_err}\n\n"
+                        f"Previous response:\n{raw[:400]}\n\n"
+                        "Return ONLY valid JSON matching the schema. No markdown. No prose."
+                    )
                 raw = provider.complete(system, fix_user)
             data = _extract_json(raw)
-            clips = _validate_clips(data, transcript["duration"])
+            clips, rejected = _validate_clips(data, transcript["duration"])
+            last_rejected = rejected
             if not clips:
-                raise ValueError("no valid clips in response")
+                logger.warning(f"raw response: {raw[:600]}")
+                raise ValueError(f"no valid clips ({len(rejected)} rejected: {rejected[:3]})")
             logger.success(f"Got {len(clips)} clips from LLM")
             return clips
         except Exception as e:
