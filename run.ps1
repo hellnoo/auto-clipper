@@ -17,30 +17,33 @@ $banner = @(
     "  ██║  ██║╚██████╔╝   ██║   ╚██████╔╝    ╚██████╗███████╗██║██║     ██║     ███████╗██║  ██║",
     "  ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝      ╚═════╝╚══════╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝"
 )
-$rainbow = @('Red','Yellow','Green','Cyan','Blue','Magenta')
-$settled = @('Magenta','Magenta','Cyan','Cyan','Blue','Blue')
+$settled = @('Cyan','Cyan','DarkCyan','Magenta','DarkMagenta','DarkMagenta')
 
 Write-Host ""
 
-# Phase 1: type-in line by line
+# Phase 1: type-in line by line, dim
 $startY = [Console]::CursorTop
 foreach ($line in $banner) {
     Write-Host $line -ForegroundColor DarkGray
-    Start-Sleep -Milliseconds 60
+    Start-Sleep -Milliseconds 50
 }
 
-# Phase 2: rainbow wave (3 passes)
-for ($cycle = 0; $cycle -lt 3; $cycle++) {
-    for ($shift = 0; $shift -lt $rainbow.Count; $shift++) {
+# Phase 2: CRT scan - bright white sweeps top to bottom 2x
+for ($pass = 0; $pass -lt 2; $pass++) {
+    for ($scan = 0; $scan -lt $banner.Count; $scan++) {
         for ($i = 0; $i -lt $banner.Count; $i++) {
             [Console]::SetCursorPosition(0, $startY + $i)
-            Write-Host $banner[$i] -ForegroundColor $rainbow[($i + $shift) % $rainbow.Count] -NoNewline
+            $color = if ($i -eq $scan) { 'White' }
+                     elseif ($i -eq $scan - 1) { 'Cyan' }
+                     elseif ($i -eq $scan + 1) { 'Cyan' }
+                     else { 'DarkGray' }
+            Write-Host $banner[$i] -ForegroundColor $color -NoNewline
         }
-        Start-Sleep -Milliseconds 70
+        Start-Sleep -Milliseconds 55
     }
 }
 
-# Phase 3: settle into gradient
+# Phase 3: settle into cyan→magenta gradient
 for ($i = 0; $i -lt $banner.Count; $i++) {
     [Console]::SetCursorPosition(0, $startY + $i)
     Write-Host $banner[$i] -ForegroundColor $settled[$i] -NoNewline
