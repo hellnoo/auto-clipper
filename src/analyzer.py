@@ -31,9 +31,37 @@ Return ONLY a JSON object. No markdown fences. No prose. Exactly this shape:
 {{"clips":[{{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>}}]}}"""
 
 
+def _condense_segments(segments: list[dict], target_chunk_sec: float = 20.0) -> list[dict]:
+    """Group short whisper segments into ~target_chunk_sec chunks to shrink the prompt
+    for very long videos. Keeps the LLM from drowning in 1000+ tiny lines."""
+    if not segments:
+        return []
+    out: list[dict] = []
+    cur = {"start": segments[0]["start"], "end": segments[0]["end"], "text": segments[0]["text"]}
+    for seg in segments[1:]:
+        if seg["end"] - cur["start"] < target_chunk_sec:
+            cur["end"] = seg["end"]
+            cur["text"] = (cur["text"] + " " + seg["text"]).strip()
+        else:
+            out.append(cur)
+            cur = {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
+    out.append(cur)
+    return out
+
+
 def _build_user_prompt(transcript: dict) -> str:
-    lines = [f"Language: {transcript['language']}", f"Duration: {transcript['duration']:.1f}s", "", "Transcript:"]
-    for seg in transcript["segments"]:
+    segs = transcript["segments"]
+    # For long transcripts, condense to keep the prompt + response within reasonable token budget.
+    if len(segs) > 300:
+        segs = _condense_segments(segs, target_chunk_sec=20.0)
+    lines = [
+        f"Language: {transcript['language']}",
+        f"Duration: {transcript['duration']:.1f}s",
+        f"Segments: {len(segs)}",
+        "",
+        "Transcript:",
+    ]
+    for seg in segs:
         lines.append(f"[{seg['start']:.1f}-{seg['end']:.1f}] {seg['text']}")
     return "\n".join(lines)
 
@@ -83,6 +111,7 @@ class GroqProvider(LLMProvider):
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format={"type": "json_object"},
             temperature=0.3,
+            max_tokens=4096,
         )
         return resp.choices[0].message.content
 
@@ -145,13 +174,24 @@ def analyze(transcript: dict) -> list[dict]:
 
     last_err: Exception | None = None
     last_rejected: list[str] = []
+    last_returned_count = -1  # -1 = no attempt yet, 0 = empty clips array, >0 = had clips
     raw = ""
     for attempt in range(1, 4):
         try:
             if attempt == 1:
                 raw = provider.complete(system, user)
             else:
-                if last_rejected:
+                if last_returned_count == 0:
+                    fix_user = (
+                        f"Your previous response was valid JSON but contained ZERO clips.\n"
+                        f"That's not acceptable — this transcript is {transcript['duration']:.0f}s long, "
+                        f"there are absolutely viral-worthy moments in here.\n\n"
+                        f"Lower your bar. Pick {config.CLIP_COUNT_MIN}-{config.CLIP_COUNT_MAX} of the BEST "
+                        f"{config.CLIP_MIN_SEC}-{config.CLIP_MAX_SEC}s windows even if none feel perfect. "
+                        f"A 60/100 score is fine.\n\n"
+                        f"Original request:\n{user}"
+                    )
+                elif last_rejected:
                     fix_user = (
                         f"Your previous response had {len(last_rejected)} clip(s) but none passed validation.\n"
                         f"Reasons: {last_rejected[:3]}\n\n"
@@ -169,11 +209,15 @@ def analyze(transcript: dict) -> list[dict]:
                     )
                 raw = provider.complete(system, fix_user)
             data = _extract_json(raw)
+            last_returned_count = len(data.get("clips") or [])
             clips, rejected = _validate_clips(data, transcript["duration"])
             last_rejected = rejected
             if not clips:
-                logger.warning(f"raw response: {raw[:600]}")
-                raise ValueError(f"no valid clips ({len(rejected)} rejected: {rejected[:3]})")
+                logger.warning(f"raw response: {raw[:800]}")
+                raise ValueError(
+                    f"no valid clips (returned {last_returned_count}, "
+                    f"rejected {len(rejected)}: {rejected[:3]})"
+                )
             logger.success(f"Got {len(clips)} clips from LLM")
             return clips
         except Exception as e:
