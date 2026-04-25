@@ -99,12 +99,38 @@ def _media_url(abs_path: str | None) -> str | None:
         return None
 
 
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _file_size(abs_path: str | None) -> str | None:
+    if not abs_path:
+        return None
+    p = Path(abs_path)
+    if not p.exists():
+        return None
+    return _human_size(p.stat().st_size)
+
+
 def _render_clip(c: dict) -> str:
     url = _media_url(c["path"])
-    video_tag = (
-        f'<video src="{url}" controls preload="metadata"></video>'
-        if url else '<div style="padding:20px;text-align:center;color:#666">no file yet</div>'
-    )
+    size = _file_size(c["path"])
+    if url:
+        download_name = Path(c["path"]).name
+        video_tag = f'<video src="{url}" controls preload="metadata"></video>'
+        download_btn = (
+            f'<a href="{url}" download="{download_name}" '
+            f'style="display:inline-block;padding:4px 10px;background:#063;color:#fff;'
+            f'border-radius:4px;text-decoration:none;font-size:11px;font-weight:600">⬇ download</a>'
+        )
+    else:
+        video_tag = '<div style="padding:20px;text-align:center;color:#666">no file yet</div>'
+        download_btn = ''
+    size_html = f'<span style="font-size:11px;color:#888;margin-left:8px">{size}</span>' if size else ''
     tags = " ".join(f"#{t}" for t in (c["hashtags"] or "").split(",") if t)
     st = c["status"] or "pending"
     st_class = "done" if st == "done" else ("error" if st.startswith("error") else "running" if "render" in st else "")
@@ -115,6 +141,7 @@ def _render_clip(c: dict) -> str:
         f'<div class="tags">{tags}</div>'
         f'<div style="margin-top:6px"><span class="status {st_class}">{st}</span> '
         f'<span style="font-size:11px;color:#888">score: {(c["score"] or 0):.0f} | {c["start_sec"]:.1f}-{c["end_sec"]:.1f}s</span></div>'
+        f'<div style="margin-top:8px;display:flex;align-items:center">{download_btn}{size_html}</div>'
         f'</div>'
     )
 

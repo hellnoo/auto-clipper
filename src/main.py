@@ -6,6 +6,26 @@ from loguru import logger
 from . import config, db, downloader, transcriber, analyzer, editor
 
 
+def _snap_clip_to_words(clip: dict, words: list[dict], pad_start: float = 0.05, pad_end: float = 0.30) -> dict:
+    """Nudge clip start/end to the nearest word boundary so we never cut mid-syllable."""
+    if not words:
+        return clip
+    start, end = float(clip["start"]), float(clip["end"])
+
+    snapped_start = start
+    for w in words:
+        if w["start"] >= start - 0.5:
+            snapped_start = max(0.0, w["start"] - pad_start)
+            break
+
+    candidates = [w for w in words if w["end"] <= end + 0.5]
+    snapped_end = candidates[-1]["end"] + pad_end if candidates else end
+
+    if snapped_end - snapped_start < 5.0:
+        return clip
+    return {**clip, "start": snapped_start, "end": snapped_end}
+
+
 def setup_logging() -> None:
     logger.remove()
     logger.add(sys.stderr, level="INFO", format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
@@ -29,6 +49,7 @@ def process_url(url: str) -> None:
         source_stem = Path(info["path"]).stem
         for i, clip in enumerate(clips):
             out = config.FINAL_DIR / f"{source_stem}_clip{i+1}.mp4"
+            clip = _snap_clip_to_words(clip, t["words"])
             clip_id = db.insert_clip(video_id, i + 1, {**clip, "status": "rendering"})
             try:
                 editor.render_clip(info["path"], clip, t["words"], out)

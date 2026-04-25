@@ -5,6 +5,7 @@ from loguru import logger
 from . import config
 
 PHRASE_SIZE = 3
+HOOK_DURATION = 2.5
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -15,6 +16,7 @@ WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,2,2,60,60,320,1
+Style: Hook,Arial Black,84,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,6,2,8,60,60,200,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -41,8 +43,14 @@ def _escape_ass_text(text: str) -> str:
     return text.replace("{", "(").replace("}", ")").replace("\\", "/")
 
 
-def generate_ass(words: list[dict], out_path: Path) -> None:
+def generate_ass(words: list[dict], out_path: Path, hook: str | None = None) -> None:
     dialogues: list[str] = []
+    if hook:
+        hook_text = _escape_ass_text(hook.strip())
+        dialogues.append(
+            f"Dialogue: 0,{_ass_time(0.0)},{_ass_time(HOOK_DURATION)},Hook,,0,0,0,,"
+            r"{\fad(150,250)}" + hook_text
+        )
     for i in range(0, len(words), PHRASE_SIZE):
         phrase = words[i : i + PHRASE_SIZE]
         if not phrase:
@@ -79,7 +87,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path = out_path.with_suffix(".ass")
     clip_words = _clip_words(words, clip["start"], clip["end"])
-    generate_ass(clip_words, ass_path)
+    generate_ass(clip_words, ass_path, hook=clip.get("hook"))
 
     duration = clip["end"] - clip["start"]
     vf = (
