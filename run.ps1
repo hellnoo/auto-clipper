@@ -9,23 +9,62 @@ $OutputEncoding = [Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 try { $Host.UI.RawUI.WindowTitle = "Auto-Clipper  -  by uncle_w" } catch {}
 
+$banner = @(
+    "   █████╗ ██╗   ██╗████████╗ ██████╗      ██████╗██╗     ██╗██████╗ ██████╗ ███████╗██████╗",
+    "  ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗    ██╔════╝██║     ██║██╔══██╗██╔══██╗██╔════╝██╔══██╗",
+    "  ███████║██║   ██║   ██║   ██║   ██║    ██║     ██║     ██║██████╔╝██████╔╝█████╗  ██████╔╝",
+    "  ██╔══██║██║   ██║   ██║   ██║   ██║    ██║     ██║     ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██╔══██╗",
+    "  ██║  ██║╚██████╔╝   ██║   ╚██████╔╝    ╚██████╗███████╗██║██║     ██║     ███████╗██║  ██║",
+    "  ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝      ╚═════╝╚══════╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝"
+)
+$rainbow = @('Red','Yellow','Green','Cyan','Blue','Magenta')
+$settled = @('Magenta','Magenta','Cyan','Cyan','Blue','Blue')
+
 Write-Host ""
-Write-Host "   █████╗ ██╗   ██╗████████╗ ██████╗      ██████╗██╗     ██╗██████╗ ██████╗ ███████╗██████╗" -ForegroundColor Magenta
-Write-Host "  ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗    ██╔════╝██║     ██║██╔══██╗██╔══██╗██╔════╝██╔══██╗" -ForegroundColor Magenta
-Write-Host "  ███████║██║   ██║   ██║   ██║   ██║    ██║     ██║     ██║██████╔╝██████╔╝█████╗  ██████╔╝" -ForegroundColor Cyan
-Write-Host "  ██╔══██║██║   ██║   ██║   ██║   ██║    ██║     ██║     ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██╔══██╗" -ForegroundColor Cyan
-Write-Host "  ██║  ██║╚██████╔╝   ██║   ╚██████╔╝    ╚██████╗███████╗██║██║     ██║     ███████╗██║  ██║" -ForegroundColor Blue
-Write-Host "  ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝      ╚═════╝╚══════╝╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝" -ForegroundColor Blue
+
+# Phase 1: type-in line by line
+$startY = [Console]::CursorTop
+foreach ($line in $banner) {
+    Write-Host $line -ForegroundColor DarkGray
+    Start-Sleep -Milliseconds 60
+}
+
+# Phase 2: rainbow wave (3 passes)
+for ($cycle = 0; $cycle -lt 3; $cycle++) {
+    for ($shift = 0; $shift -lt $rainbow.Count; $shift++) {
+        for ($i = 0; $i -lt $banner.Count; $i++) {
+            [Console]::SetCursorPosition(0, $startY + $i)
+            Write-Host $banner[$i] -ForegroundColor $rainbow[($i + $shift) % $rainbow.Count] -NoNewline
+        }
+        Start-Sleep -Milliseconds 70
+    }
+}
+
+# Phase 3: settle into gradient
+for ($i = 0; $i -lt $banner.Count; $i++) {
+    [Console]::SetCursorPosition(0, $startY + $i)
+    Write-Host $banner[$i] -ForegroundColor $settled[$i] -NoNewline
+}
+[Console]::SetCursorPosition(0, $startY + $banner.Count)
 Write-Host ""
+
+# Phase 4: typewriter tagline
+function Type-Char($text, $color, $delay = 12) {
+    foreach ($c in $text.ToCharArray()) {
+        Write-Host -NoNewline $c -ForegroundColor $color
+        Start-Sleep -Milliseconds $delay
+    }
+}
+
 Write-Host "          ┌──────────────────────────────────────────────────────────────┐" -ForegroundColor DarkGray
 Write-Host "          │  " -NoNewline -ForegroundColor DarkGray
-Write-Host "viral short-form clipper" -NoNewline -ForegroundColor White
+Type-Char "viral short-form clipper" White
 Write-Host "  ·  " -NoNewline -ForegroundColor DarkGray
-Write-Host "yt-dlp + whisper + groq + ffmpeg" -NoNewline -ForegroundColor Gray
+Type-Char "yt-dlp + whisper + groq + ffmpeg" Gray 8
 Write-Host "  │" -ForegroundColor DarkGray
 Write-Host "          │" -NoNewline -ForegroundColor DarkGray
 Write-Host "                                                  by " -NoNewline -ForegroundColor DarkGray
-Write-Host "uncle_w" -NoNewline -ForegroundColor Yellow
+Type-Char "uncle_w" Yellow 60
 Write-Host "  🎬  │" -ForegroundColor DarkGray
 Write-Host "          └──────────────────────────────────────────────────────────────┘" -ForegroundColor DarkGray
 Write-Host ""
