@@ -30,6 +30,28 @@ Pipeline: **yt-dlp** → **faster-whisper** (local) → **Ollama or Groq** (loca
 
 ## Quick start
 
+### Windows: one-click launcher (easiest)
+
+1. Install the three prerequisites once:
+   - Python 3.11+ — https://www.python.org/downloads/ (tick **Add Python to PATH**)
+   - ffmpeg — `winget install Gyan.FFmpeg`
+   - Docker Desktop — https://www.docker.com/products/docker-desktop/
+2. Get a free Groq API key at https://console.groq.com → put it in `config\.env`:
+   ```
+   LLM_PROVIDER=groq
+   GROQ_API_KEY=gsk_xxx
+   ```
+3. **Double-click `run.bat`**.
+
+The launcher will:
+- create a virtualenv + install Python deps (first run only, ~3 min)
+- start cobalt in Docker (so YouTube downloads work via your residential IP)
+- start the dashboard on http://localhost:8000 and open your browser
+
+To stop: close the window (Ctrl+C). To stop cobalt too: `docker stop cobalt`.
+
+### Manual / macOS / Linux
+
 ```bash
 git clone <repo> auto-clipper
 cd auto-clipper
