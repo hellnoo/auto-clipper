@@ -169,31 +169,73 @@ The repo is HF-Spaces-ready (Docker SDK, port 7860). On the free tier you get **
 - Long videos (>20 min) are slow on 2 vCPU. Use `WHISPER_MODEL=base` if too slow.
 - `OLLAMA_*` vars are ignored when `LLM_PROVIDER=groq`.
 
-## Self-hosting cobalt for YouTube (free, ~10 min)
+## Self-hosting cobalt for YouTube (free, ~15 min, residential IP)
 
-YouTube blocks the public `api.cobalt.tools` (JWT-only) and HF Spaces' datacenter IP at the SSL layer. The fix is to run your own [cobalt](https://github.com/imputnet/cobalt) instance — it uses better fingerprinting than plain yt-dlp and usually gets through.
+YouTube blocks the public `api.cobalt.tools` (JWT-only) and every datacenter IP (HF Spaces, Render, Koyeb, Fly...) at the SSL layer. The only reliably-free path is running [cobalt](https://github.com/imputnet/cobalt) **on your own machine** (residential IP = YT works) and exposing it to the HF Space via a free tunnel.
 
-**Deploy on Koyeb (free, 1 nano, no sleep):**
+This guide uses **Tailscale Funnel** — gives you a stable HTTPS URL like `https://<machine>.<tailnet>.ts.net`, no domain needed, free forever. Your laptop must be on when you want to generate clips, but cobalt itself is tiny (~100 MB RAM).
 
-1. Sign up at https://app.koyeb.com (GitHub login).
-2. Create app → **Deploy a Docker image**.
-   - Image: `ghcr.io/imputnet/cobalt:10`
-   - Port: `9000` (HTTP)
-   - Region: pick the closest one.
-3. Add **Environment variables**:
-   - `API_URL` = `https://<your-app>.koyeb.app/` — you get the URL after first deploy; redeploy after setting this.
-   - `API_PORT` = `9000`
-   - `CORS_WILDCARD` = `1`
-   - (Optional, recommended) `API_KEY_URL` = `https://gist.githubusercontent.com/.../keys.json` with a JSON like `{"yourkey":{"name":"main","limit":1000}}`, then set `API_AUTH_REQUIRED=1`. Skip for first test.
-4. Deploy. Wait ~1 min. Hit `https://<your-app>.koyeb.app/api/serverInfo` → should return JSON.
-5. In your HF Space → **Settings → Variables and secrets**:
-   - `COBALT_API_URL` = `https://<your-app>.koyeb.app`
-   - `COBALT_API_KEY` = `yourkey` (only if you enabled auth above)
-6. Restart the Space. Submit a YT URL → log should show `trying cobalt fallback at https://<your-app>.koyeb.app` → success.
+### 1. Install Tailscale + get your URL
 
-**If YT still blocks your Koyeb IP:** add a YouTube proxy to cobalt — set `YOUTUBE_PROXY=http://user:pass@host:port` in cobalt env. Free residential trials: Webshare (10 IPs free), IPRoyal ($1.75 trial). Otherwise downloads on the Koyeb IP work for most videos but may fail on viral / age-gated ones.
+1. Sign up at https://login.tailscale.com (GitHub/Google login).
+2. Install Tailscale for Windows: https://tailscale.com/download/windows → run the installer → sign in.
+3. Open https://login.tailscale.com/admin/machines → note your machine's full DNS name, e.g. `desktop-ha3b65f.tailXXXXX.ts.net`. **This is your `API_URL`.**
+4. Enable HTTPS for your tailnet: https://login.tailscale.com/admin/dns → toggle **HTTPS Certificates** on.
 
-**Alternative hosts:** Render (free, sleeps after 15min — first request slow), Northflank (free hobby), Fly.io ($5 credit). Same image + env vars.
+### 2. Run cobalt locally with Docker
+
+1. Install Docker Desktop for Windows: https://www.docker.com/products/docker-desktop/
+2. Open PowerShell and run (replace the URL with yours from step 1.3):
+   ```powershell
+   docker run -d --name cobalt --restart unless-stopped -p 9000:9000 `
+     -e API_URL="https://desktop-ha3b65f.tailXXXXX.ts.net/" `
+     -e API_PORT=9000 `
+     -e CORS_WILDCARD=1 `
+     ghcr.io/imputnet/cobalt:10
+   ```
+3. Verify: `curl http://localhost:9000/api/serverInfo` → should return JSON with `cobalt` version.
+
+### 3. Expose cobalt via Tailscale Funnel
+
+In PowerShell:
+```powershell
+tailscale serve --bg --https=443 http://localhost:9000
+tailscale funnel 443 on
+```
+
+Test from outside (phone on cellular, or another network):
+```
+https://desktop-ha3b65f.tailXXXXX.ts.net/api/serverInfo
+```
+
+Should return the same JSON. If yes — public access works.
+
+### 4. Wire it into the HF Space
+
+In your HF Space → **Settings → Variables and secrets** → add:
+- `COBALT_API_URL` = `https://desktop-ha3b65f.tailXXXXX.ts.net`
+
+Restart the Space. Submit a YouTube URL → log should show `trying cobalt fallback at https://desktop-...ts.net` → success.
+
+### Daily use
+
+- Tailscale + Docker auto-start on boot. As long as your laptop is on, the cobalt URL works.
+- To stop: `docker stop cobalt` and `tailscale funnel 443 off`.
+- To update cobalt: `docker pull ghcr.io/imputnet/cobalt:10 && docker rm -f cobalt` and re-run step 2.2.
+
+### Alternative: random URL via Cloudflare Quick Tunnel
+
+If you don't want a Tailscale account, use Cloudflare's anonymous tunnel — but the URL **changes every restart**, so you'll need to update `COBALT_API_URL` and the cobalt container's `API_URL` every time:
+
+```powershell
+# Install: winget install --id Cloudflare.cloudflared
+cloudflared tunnel --url http://localhost:9000
+# Copy the printed https://*.trycloudflare.com URL,
+# restart cobalt with API_URL set to it,
+# update COBALT_API_URL in HF Space.
+```
+
+Use Tailscale unless you really don't want an account.
 
 ## Local Docker (optional)
 
