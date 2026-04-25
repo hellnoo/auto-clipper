@@ -1,7 +1,10 @@
 import base64
 import os
+import re
+import subprocess
 from pathlib import Path
 from loguru import logger
+import requests
 import yt_dlp
 from . import config
 
@@ -73,6 +76,79 @@ YT_CLIENT_FALLBACKS = [
 ]
 
 
+def _is_youtube(url: str) -> bool:
+    return "youtube.com" in url or "youtu.be" in url
+
+
+def _yt_video_id(url: str) -> str | None:
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})", url)
+    return m.group(1) if m else None
+
+
+def _ffprobe_duration(path: Path) -> float:
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(r.stdout.strip() or 0)
+    except Exception:
+        return 0.0
+
+
+# cobalt.tools fallback — used when yt-dlp fails (typically YouTube on datacenter IPs).
+# Public instance often rate-limits or requires auth; allow override via env.
+def _cobalt_fallback(url: str) -> dict:
+    api_url = os.getenv("COBALT_API_URL", "https://api.cobalt.tools").rstrip("/")
+    logger.info(f"trying cobalt fallback at {api_url}")
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    api_key = os.getenv("COBALT_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Api-Key {api_key}"
+
+    payload = {
+        "url": url,
+        "videoQuality": str(config.VIDEO_QUALITY),
+        "filenameStyle": "basic",
+        "downloadMode": "auto",
+    }
+    r = requests.post(api_url, json=payload, headers=headers, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(f"cobalt HTTP {r.status_code}: {r.text[:200]}")
+    data = r.json()
+    status = data.get("status", "")
+    if status not in ("tunnel", "redirect", "stream"):
+        err = data.get("error", {})
+        msg = err.get("code") if isinstance(err, dict) else (data.get("text") or status)
+        raise RuntimeError(f"cobalt status={status}: {msg}")
+
+    media_url = data.get("url")
+    if not media_url:
+        raise RuntimeError(f"cobalt: missing url in response keys={list(data)}")
+
+    vid_id = _yt_video_id(url) or "cobalt"
+    out_path = config.RAW_DIR / f"{vid_id}.mp4"
+    logger.info(f"streaming cobalt media -> {out_path.name}")
+    with requests.get(media_url, stream=True, timeout=600) as resp:
+        resp.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                if chunk:
+                    f.write(chunk)
+
+    duration = _ffprobe_duration(out_path)
+    title = data.get("filename") or vid_id
+    logger.success(f"cobalt downloaded: {out_path.name} ({duration:.0f}s)")
+    return {
+        "path": str(out_path),
+        "title": title,
+        "duration": duration,
+        "id": vid_id,
+        "url": url,
+    }
+
+
 def download(url: str) -> dict:
     logger.info(f"Downloading {url}")
     last_err: Exception | None = None
@@ -101,11 +177,20 @@ def download(url: str) -> dict:
             last_err = e
             msg = str(e).splitlines()[-1][:200]
             logger.warning(f"attempt {i+1} failed: {msg}")
+
+    if _is_youtube(url):
+        try:
+            return _cobalt_fallback(url)
+        except Exception as e:
+            logger.warning(f"cobalt fallback failed: {str(e)[:200]}")
+            last_err = e
+
     raise RuntimeError(
-        f"yt-dlp failed after {len(YT_CLIENT_FALLBACKS)} attempts. "
-        f"If on a cloud host (HF Spaces, etc.), YouTube likely blocked the datacenter IP. "
-        f"Upload a cookies.txt to /data/cookies.txt (or set YT_COOKIES_FILE). "
-        f"Last error: {last_err}"
+        f"All download paths failed. yt-dlp failed after {len(YT_CLIENT_FALLBACKS)} attempts"
+        + (" and cobalt fallback also failed" if _is_youtube(url) else "")
+        + f". If on a cloud host (HF Spaces, etc.), YouTube likely blocked the datacenter IP. "
+        f"Try setting COBALT_API_URL to a working instance, COBALT_API_KEY if required, "
+        f"or upload cookies.txt to /data/cookies.txt. Last error: {last_err}"
     )
 
 

@@ -128,6 +128,8 @@ make ollama-setup
 | `VIDEO_QUALITY` | `720` | max download height |
 | `CLIP_MIN_SEC` / `CLIP_MAX_SEC` | `30` / `60` | per-clip duration bounds |
 | `CLIP_COUNT_MIN` / `CLIP_COUNT_MAX` | `3` / `7` | how many clips to pick |
+| `COBALT_API_URL` | `https://api.cobalt.tools` | YouTube fallback when yt-dlp is blocked (datacenter IPs). Override with a working public/self-hosted [cobalt](https://github.com/imputnet/cobalt) instance. |
+| `COBALT_API_KEY` | _(empty)_ | optional API key if your cobalt instance requires auth. |
 
 ## Testing individual modules
 
