@@ -1,11 +1,46 @@
+import base64
 import os
 from pathlib import Path
 from loguru import logger
 import yt_dlp
 from . import config
 
-# Optional cookies file for sites that block datacenter IPs (YouTube on HF Spaces, etc.)
-COOKIES_FILE = os.getenv("YT_COOKIES_FILE", "/data/cookies.txt")
+# Cookies for sites that block datacenter IPs (YouTube on HF Spaces, etc.).
+# Resolution order:
+#   1. YT_COOKIES_FILE env var (explicit path)
+#   2. YT_COOKIES_B64 env var (base64-encoded contents, decoded to /tmp/cookies.txt)
+#   3. Common fallback paths
+_COOKIES_CACHE: str | None | bool = False  # False = unresolved, None = none found, str = path
+
+
+def _resolve_cookies_file() -> str | None:
+    global _COOKIES_CACHE
+    if _COOKIES_CACHE is not False:
+        return _COOKIES_CACHE  # type: ignore[return-value]
+
+    explicit = os.getenv("YT_COOKIES_FILE", "").strip()
+    if explicit and Path(explicit).exists():
+        _COOKIES_CACHE = explicit
+        return explicit
+
+    b64 = os.getenv("YT_COOKIES_B64", "").strip()
+    if b64:
+        path = "/tmp/cookies.txt"
+        try:
+            Path(path).write_bytes(base64.b64decode(b64))
+            logger.info("decoded YT_COOKIES_B64 -> /tmp/cookies.txt")
+            _COOKIES_CACHE = path
+            return path
+        except Exception as e:
+            logger.warning(f"YT_COOKIES_B64 decode failed: {e}")
+
+    for p in ("/data/cookies.txt", "/app/cookies.txt", "cookies.txt"):
+        if Path(p).exists():
+            _COOKIES_CACHE = p
+            return p
+
+    _COOKIES_CACHE = None
+    return None
 
 
 def _base_opts() -> dict:
@@ -20,9 +55,10 @@ def _base_opts() -> dict:
         "retries": 3,
         "fragment_retries": 3,
     }
-    if Path(COOKIES_FILE).exists():
-        opts["cookiefile"] = COOKIES_FILE
-        logger.info(f"using cookies: {COOKIES_FILE}")
+    cookies = _resolve_cookies_file()
+    if cookies:
+        opts["cookiefile"] = cookies
+        logger.info(f"using cookies: {cookies}")
     return opts
 
 
