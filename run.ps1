@@ -1,4 +1,4 @@
-# Auto-Clipper one-click launcher (Windows)
+﻿# Auto-Clipper one-click launcher (Windows)
 # Boots cobalt (Docker) + auto-clipper dashboard, opens browser, cleans up on exit.
 
 $ErrorActionPreference = "Stop"
