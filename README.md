@@ -169,6 +169,32 @@ The repo is HF-Spaces-ready (Docker SDK, port 7860). On the free tier you get **
 - Long videos (>20 min) are slow on 2 vCPU. Use `WHISPER_MODEL=base` if too slow.
 - `OLLAMA_*` vars are ignored when `LLM_PROVIDER=groq`.
 
+## Self-hosting cobalt for YouTube (free, ~10 min)
+
+YouTube blocks the public `api.cobalt.tools` (JWT-only) and HF Spaces' datacenter IP at the SSL layer. The fix is to run your own [cobalt](https://github.com/imputnet/cobalt) instance — it uses better fingerprinting than plain yt-dlp and usually gets through.
+
+**Deploy on Koyeb (free, 1 nano, no sleep):**
+
+1. Sign up at https://app.koyeb.com (GitHub login).
+2. Create app → **Deploy a Docker image**.
+   - Image: `ghcr.io/imputnet/cobalt:10`
+   - Port: `9000` (HTTP)
+   - Region: pick the closest one.
+3. Add **Environment variables**:
+   - `API_URL` = `https://<your-app>.koyeb.app/` — you get the URL after first deploy; redeploy after setting this.
+   - `API_PORT` = `9000`
+   - `CORS_WILDCARD` = `1`
+   - (Optional, recommended) `API_KEY_URL` = `https://gist.githubusercontent.com/.../keys.json` with a JSON like `{"yourkey":{"name":"main","limit":1000}}`, then set `API_AUTH_REQUIRED=1`. Skip for first test.
+4. Deploy. Wait ~1 min. Hit `https://<your-app>.koyeb.app/api/serverInfo` → should return JSON.
+5. In your HF Space → **Settings → Variables and secrets**:
+   - `COBALT_API_URL` = `https://<your-app>.koyeb.app`
+   - `COBALT_API_KEY` = `yourkey` (only if you enabled auth above)
+6. Restart the Space. Submit a YT URL → log should show `trying cobalt fallback at https://<your-app>.koyeb.app` → success.
+
+**If YT still blocks your Koyeb IP:** add a YouTube proxy to cobalt — set `YOUTUBE_PROXY=http://user:pass@host:port` in cobalt env. Free residential trials: Webshare (10 IPs free), IPRoyal ($1.75 trial). Otherwise downloads on the Koyeb IP work for most videos but may fail on viral / age-gated ones.
+
+**Alternative hosts:** Render (free, sleeps after 15min — first request slow), Northflank (free hobby), Fly.io ($5 credit). Same image + env vars.
+
 ## Local Docker (optional)
 
 ```bash
