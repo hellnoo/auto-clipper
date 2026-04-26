@@ -309,6 +309,17 @@ def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list
     return spread, rejected + spread_rejected
 
 
+def _is_rate_limit(err: Exception) -> bool:
+    msg = str(err).lower()
+    return (
+        "rate_limit" in msg
+        or "tokens per minute" in msg
+        or "tpm" in msg
+        or "request too large" in msg
+        or " 413" in msg
+    )
+
+
 def analyze(transcript: dict) -> list[dict]:
     provider = get_provider()
     logger.info(f"Analyzing with {config.LLM_PROVIDER} ({type(provider).__name__})")
@@ -319,43 +330,52 @@ def analyze(transcript: dict) -> list[dict]:
         cmin=config.CLIP_COUNT_MIN,
         cmax=config.CLIP_COUNT_MAX,
     )
-    user = _build_user_prompt(transcript)
+    # Start budget — providers with bigger TPM caps (OpenRouter / Claude / GPT-4) can use more.
+    token_budget = 24000 if config.LLM_PROVIDER in ("openrouter", "or") else 6500
+    user = _build_user_prompt(transcript, target_input_tokens=token_budget)
 
     last_err: Exception | None = None
     last_rejected: list[str] = []
-    last_returned_count = -1  # -1 = no attempt yet, 0 = empty clips array, >0 = had clips
+    last_returned_count = -1
     raw = ""
     for attempt in range(1, 4):
         try:
             if attempt == 1:
                 raw = provider.complete(system, user)
+            elif _is_rate_limit(last_err) if last_err else False:
+                # Halve budget and rebuild — earlier attempt blew the TPM cap.
+                token_budget = max(1500, token_budget // 2)
+                logger.info(f"rate-limit retry: shrinking transcript to ~{token_budget} input tokens")
+                user = _build_user_prompt(transcript, target_input_tokens=token_budget)
+                raw = provider.complete(system, user)
+            elif last_returned_count == 0:
+                fix_user = (
+                    f"Your previous response was valid JSON but contained ZERO clips.\n"
+                    f"That's not acceptable — this transcript is {transcript['duration']:.0f}s long, "
+                    f"there are absolutely viral-worthy moments in here.\n\n"
+                    f"Lower your bar. Pick {config.CLIP_COUNT_MIN}-{config.CLIP_COUNT_MAX} of the BEST "
+                    f"{config.CLIP_MIN_SEC}-{config.CLIP_MAX_SEC}s windows even if none feel perfect. "
+                    f"A 60/100 score is fine.\n\n"
+                    f"Original request:\n{user}"
+                )
+                raw = provider.complete(system, fix_user)
+            elif last_rejected:
+                fix_user = (
+                    f"Your previous response had {len(last_rejected)} clip(s) but none passed validation.\n"
+                    f"Reasons: {last_rejected[:3]}\n\n"
+                    f"Constraints reminder:\n"
+                    f"- Video duration: {transcript['duration']:.1f}s\n"
+                    f"- Each clip MUST be between {config.CLIP_MIN_SEC} and {config.CLIP_MAX_SEC} seconds long.\n"
+                    f"- 'start' and 'end' must be within [0, {transcript['duration']:.1f}] (in seconds).\n\n"
+                    f"Original request:\n{user}"
+                )
+                raw = provider.complete(system, fix_user)
             else:
-                if last_returned_count == 0:
-                    fix_user = (
-                        f"Your previous response was valid JSON but contained ZERO clips.\n"
-                        f"That's not acceptable — this transcript is {transcript['duration']:.0f}s long, "
-                        f"there are absolutely viral-worthy moments in here.\n\n"
-                        f"Lower your bar. Pick {config.CLIP_COUNT_MIN}-{config.CLIP_COUNT_MAX} of the BEST "
-                        f"{config.CLIP_MIN_SEC}-{config.CLIP_MAX_SEC}s windows even if none feel perfect. "
-                        f"A 60/100 score is fine.\n\n"
-                        f"Original request:\n{user}"
-                    )
-                elif last_rejected:
-                    fix_user = (
-                        f"Your previous response had {len(last_rejected)} clip(s) but none passed validation.\n"
-                        f"Reasons: {last_rejected[:3]}\n\n"
-                        f"Constraints reminder:\n"
-                        f"- Video duration: {transcript['duration']:.1f}s\n"
-                        f"- Each clip MUST be between {config.CLIP_MIN_SEC} and {config.CLIP_MAX_SEC} seconds long.\n"
-                        f"- 'start' and 'end' must be within [0, {transcript['duration']:.1f}] (in seconds).\n\n"
-                        f"Original request:\n{user}"
-                    )
-                else:
-                    fix_user = (
-                        f"Your previous response could not be parsed as JSON. Error: {last_err}\n\n"
-                        f"Previous response:\n{raw[:400]}\n\n"
-                        "Return ONLY valid JSON matching the schema. No markdown. No prose."
-                    )
+                fix_user = (
+                    f"Your previous response could not be parsed as JSON. Error: {last_err}\n\n"
+                    f"Previous response:\n{raw[:400]}\n\n"
+                    "Return ONLY valid JSON matching the schema. No markdown. No prose."
+                )
                 raw = provider.complete(system, fix_user)
             data = _extract_json(raw)
             last_returned_count = len(data.get("clips") or [])
