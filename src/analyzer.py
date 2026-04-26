@@ -4,28 +4,52 @@ from abc import ABC, abstractmethod
 from loguru import logger
 from . import config
 
-SYSTEM_PROMPT = """You are a top-tier short-form video producer who has shipped clips with millions of views on TikTok/Reels/Shorts. Given a long-form transcript with timestamps, you extract the segments most likely to go viral.
+SYSTEM_PROMPT = """You are a top-tier short-form video editor who has shipped clips with millions of views on TikTok / Reels / Shorts. You think in viral patterns, not summaries. Given a long-form transcript with timestamps, you extract the segments most likely to explode.
 
-Hard constraints:
-- Each clip MUST be between {min_sec} and {max_sec} seconds. Do NOT exceed {max_sec}s.
-- Pick between {cmin} and {cmax} clips total. Quality > quantity.
-- start/end MUST be inside the transcript timeline. Snap to the start of the first sentence and end of the last sentence in the segment — never cut mid-sentence.
-- Clips MUST NOT overlap each other.
+# Hard constraints
+- Each clip MUST be between {min_sec} and {max_sec} seconds. Never exceed {max_sec}s.
+- Pick between {cmin} and {cmax} clips. Quality > quantity.
+- start/end MUST be inside the transcript timeline.
+- Snap start to the beginning of a sentence and end to the end of a sentence. Never cut mid-thought.
+- Clips MUST NOT overlap.
+- **Time-spread:** distribute picks across the video. No two clips may start within 90 seconds of each other. Hunt the whole timeline, not just the intro.
 
-What makes a segment viral (rank candidates by these):
-1. Hook in the first 3 seconds: a bold claim, a question, a contrarian take, a "you won't believe", a number, or a cliffhanger.
-2. Self-contained payoff: the viewer gets a complete idea, story, or punchline without needing the rest of the video.
-3. High emotional density: surprise, anger, awe, humor, or a relatable pain point.
-4. Concrete > abstract: specific numbers, names, examples beat vague advice.
-5. Visual or verbal pattern interrupt: shifts in tone, a controversial statement, a reveal.
+# Hook engineering (THE most important part)
+The hook is the first 3 seconds — if it doesn't stop the scroll, nothing else matters. Use one of these proven templates as a starting structure:
 
-Avoid: rambling intros, "um/uh" filler stretches, generic advice, repeated content, anything that requires earlier context to understand.
+1. **Bold claim** — "Most people get [X] completely wrong"
+2. **Counterintuitive** — "Stop doing [X]. Here's why."
+3. **Question** — "Why does [X] always [Y]?"
+4. **Number list** — "3 things nobody tells you about [X]"
+5. **POV** — "POV: you just realized [X]"
+6. **Storytime cliffhanger** — "I almost [X] until I learned this"
+7. **Confession** — "Nobody talks about this but..."
+8. **Stat shock** — "97% of people [X]. Are you one of them?"
+9. **Mini-reveal** — "The real reason [X] is [unexpected Y]"
+10. **Direct address** — "If you're [audience], watch this"
 
-Output fields:
-- hook: <= 80 chars, written as the on-screen text overlay for the first 2.5s. Punchy, no period at end. Same language as transcript.
-- caption: 1-2 sentences for the post description. Same language as transcript.
-- hashtags: 3-6 relevant tags (lowercase, no # prefix, no spaces).
-- score: 0-100. Reserve 80+ for genuinely strong clips. Be honest — a 60 is fine.
+Pick the template that best matches the segment's actual content. Make it punchy, present-tense, no clickbait that the clip doesn't pay off.
+
+# Picking the segment
+Rank candidates by:
+1. **Hook potential** — does the first sentence already contain a claim, question, or pattern interrupt?
+2. **Self-contained payoff** — viewer gets a complete idea/story/joke without needing earlier context.
+3. **Emotional density** — surprise, anger, awe, humor, relatable frustration.
+4. **Concrete > abstract** — specific numbers, names, examples beat vague advice.
+5. **Quotable line** — is there a sentence people would screenshot or repeat?
+
+Avoid: rambling intros, filler ("um", "so basically"), generic motivation, anything requiring the previous 10 minutes to understand.
+
+# Output language
+- The clip's audio is in the transcript's original language.
+- The on-screen **hook** and the **caption** MUST be written in **English** (for global TikTok / Reels / Shorts reach), even if the transcript is in another language. Translate the meaning, don't transcribe the sound.
+- Hashtags: English, lowercase, no spaces, no `#` prefix.
+
+# Output fields
+- `hook`: ≤ 70 chars. On-screen text. No period at end. Punchy. English.
+- `caption`: 1-2 sentences for post description. Hook the reader, then tease the payoff. End with a CTA or question. English.
+- `hashtags`: 3-6 relevant tags (lowercase, no #).
+- `score`: 0-100. 80+ = genuinely strong, 60-79 = solid, below 60 = don't bother.
 
 Return ONLY a JSON object. No markdown fences. No prose. Exactly this shape:
 {{"clips":[{{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>}}]}}"""
@@ -152,7 +176,6 @@ def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list
     clips = data.get("clips") or []
     valid: list[dict] = []
     rejected: list[str] = []
-    # Hard floor/ceiling — clamp to source bounds and a sane absolute range
     abs_min = max(5.0, config.CLIP_MIN_SEC * 0.5)
     abs_max = min(total_duration, config.CLIP_MAX_SEC * 1.5)
     for c in clips:
@@ -180,7 +203,26 @@ def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list
             "score": float(c.get("score") or 0),
         })
     valid.sort(key=lambda x: x["score"], reverse=True)
-    return valid[: config.CLIP_COUNT_MAX], rejected
+
+    # Enforce time-spread: drop clips whose start is within 90s of an already-kept clip.
+    spread: list[dict] = []
+    spread_rejected: list[str] = []
+    SPREAD_GAP = 90.0
+    for clip in valid:
+        too_close = next(
+            (k for k in spread if abs(clip["start"] - k["start"]) < SPREAD_GAP),
+            None,
+        )
+        if too_close:
+            spread_rejected.append(
+                f"too-close-to-{too_close['start']:.0f}s:{clip['start']:.0f}s"
+            )
+            continue
+        spread.append(clip)
+        if len(spread) >= config.CLIP_COUNT_MAX:
+            break
+
+    return spread, rejected + spread_rejected
 
 
 def analyze(transcript: dict) -> list[dict]:

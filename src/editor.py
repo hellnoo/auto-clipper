@@ -6,6 +6,8 @@ from . import config
 
 PHRASE_SIZE = 3
 HOOK_DURATION = 2.5
+# Caption: white text, fat black outline, soft drop shadow.
+# Hook: huge bold yellow, thicker stroke, top-aligned with semi-transparent black panel feel.
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -15,8 +17,8 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,2,2,60,60,320,1
-Style: Hook,Arial Black,84,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,6,2,8,60,60,200,1
+Style: Default,Montserrat,82,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,7,3,2,80,80,360,1
+Style: Hook,Impact,108,&H0000F0FF,&H000000FF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,9,4,8,80,80,180,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -46,10 +48,13 @@ def _escape_ass_text(text: str) -> str:
 def generate_ass(words: list[dict], out_path: Path, hook: str | None = None) -> None:
     dialogues: list[str] = []
     if hook:
+        # Word-wrap long hooks so they don't run off-screen.
         hook_text = _escape_ass_text(hook.strip())
+        # Pop-in scale animation + fade for impact.
+        anim = r"{\fad(120,300)\t(0,200,\fscx110\fscy110)\t(200,400,\fscx100\fscy100)}"
         dialogues.append(
-            f"Dialogue: 0,{_ass_time(0.0)},{_ass_time(HOOK_DURATION)},Hook,,0,0,0,,"
-            r"{\fad(150,250)}" + hook_text
+            f"Dialogue: 1,{_ass_time(0.0)},{_ass_time(HOOK_DURATION)},Hook,,0,0,0,,"
+            + anim + hook_text
         )
     for i in range(0, len(words), PHRASE_SIZE):
         phrase = words[i : i + PHRASE_SIZE]
@@ -60,7 +65,8 @@ def generate_ass(words: list[dict], out_path: Path, hook: str | None = None) -> 
             for k, w in enumerate(phrase):
                 txt = _escape_ass_text(w["word"])
                 if k == j:
-                    parts.append(r"{\c&H00FFFF&\b1}" + txt + r"{\c&HFFFFFF&}")
+                    # Active word: bright yellow, slightly bigger, bold.
+                    parts.append(r"{\c&H00F0FF&\b1\fs92}" + txt + r"{\c&HFFFFFF&\b0\fs82}")
                 else:
                     parts.append(txt)
             start = _ass_time(active["start"])
