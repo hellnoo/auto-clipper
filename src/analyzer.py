@@ -163,12 +163,46 @@ class GroqProvider(LLMProvider):
         return resp.choices[0].message.content
 
 
+class OpenRouterProvider(LLMProvider):
+    """OpenAI-compatible client pointed at OpenRouter so we can use Claude / GPT-4 / etc.
+    on a single key. Defaults to anthropic/claude-sonnet-4.5 — strong viral judgment,
+    way better than llama for nuanced hook generation, ~10x cheaper than Opus."""
+    def __init__(self):
+        from openai import OpenAI
+        if not config.OPENROUTER_API_KEY:
+            raise RuntimeError("OPENROUTER_API_KEY is not set")
+        self.client = OpenAI(
+            api_key=config.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            default_headers={
+                "HTTP-Referer": config.OPENROUTER_REFERER,
+                "X-Title": config.OPENROUTER_TITLE,
+            },
+        )
+        self.model = config.OPENROUTER_MODEL
+
+    def complete(self, system: str, user: str) -> str:
+        # Not every model on OpenRouter supports response_format=json_object,
+        # but the major ones (Claude 3.5+, GPT-4o, Gemini 1.5+) do. Pass it
+        # through; if a chosen model rejects it, the user can switch model.
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+            max_tokens=4096,
+        )
+        return resp.choices[0].message.content
+
+
 def get_provider() -> LLMProvider:
     p = config.LLM_PROVIDER
     if p == "ollama":
         return OllamaProvider()
     if p == "groq":
         return GroqProvider()
+    if p in ("openrouter", "or"):
+        return OpenRouterProvider()
     raise ValueError(f"unknown LLM_PROVIDER: {p}")
 
 
