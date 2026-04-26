@@ -24,7 +24,7 @@ WrapStyle: 2
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,80,80,600,1
 Style: Hook,Impact,112,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,10,4,8,80,80,260,1
-Style: Emoji,Segoe UI Emoji,140,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,4,5,0,0,0,1
+Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -91,6 +91,21 @@ def generate_ass(
                 emoji_map[nw] = e.get("emoji", "")
         emitted = 0
         used_norms: set[str] = set()
+        # Position scatter — alternate around center so emojis don't pile up.
+        # Coords are in PlayRes (1080×1920). Y range 640-820 sits comfortably
+        # between the hook line and the caption block.
+        scatter = [
+            (540, 720),  # dead center
+            (420, 690),  # left, slightly up
+            (660, 730),  # right, slightly down
+            (510, 780),  # center-low
+            (570, 660),  # center-high
+            (390, 770),  # far left, low
+            (690, 680),  # far right, high
+            (540, 740),  # center
+            (450, 720),  # left
+            (630, 720),  # right
+        ]
         for w in words:
             if w["start"] < HOOK_DURATION + CAPTION_GRACE:
                 continue
@@ -98,15 +113,33 @@ def generate_ass(
             if nw in emoji_map and nw not in used_norms:
                 emo = emoji_map[nw]
                 start_t = max(0.0, w["start"] - 0.05)
-                end_t = w["end"] + 1.4
-                pop = r"{\fad(120,300)\t(0,180,\fscx115\fscy115)\t(180,320,\fscx100\fscy100)\an5\pos(540,720)}"
+                end_t = w["end"] + 1.6
+                px, py = scatter[emitted % len(scatter)]
+                # Alternate rotation direction for variety
+                rot_in = -10 if emitted % 2 == 0 else 10
+                # Layered animation:
+                #  0-160ms   : pop in, scale 30%->145%, rotate from rot_in to 0
+                #  160-300ms : settle to 100% with slight overshoot
+                #  900-1500ms: breathe out 100%->110%
+                #  1500-2000ms: breathe back 110%->100%
+                # Plus fade-in 150ms / fade-out 400ms for soft edges.
+                anim = (
+                    r"{\fad(150,400)"
+                    rf"\an5\pos({px},{py})"
+                    rf"\fscx30\fscy30\frz{rot_in}"
+                    rf"\t(0,160,\fscx145\fscy145\frz0)"
+                    r"\t(160,300,\fscx100\fscy100)"
+                    r"\t(900,1500,\fscx110\fscy110)"
+                    r"\t(1500,2000,\fscx100\fscy100)"
+                    r"}"
+                )
                 dialogues.append(
                     f"Dialogue: 2,{_ass_time(start_t)},{_ass_time(end_t)},Emoji,,0,0,0,,"
-                    + pop + emo
+                    + anim + emo
                 )
                 used_norms.add(nw)
                 emitted += 1
-                if emitted >= 8:
+                if emitted >= 10:
                     break
 
     # Karaoke-fill captions, only after the hook period.
