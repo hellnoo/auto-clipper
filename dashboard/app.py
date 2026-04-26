@@ -392,7 +392,7 @@ def regenerate(video_id: int) -> RedirectResponse:
 
 @app.get("/api/videos")
 def api_videos() -> dict:
-    return {"videos": db.list_videos(), "queue_size": job_queue.qsize(), "current": _current["url"]}
+    return {"videos": db.list_videos(), "queue_size": job_queue.qsize(), "current": _current["label"]}
 
 
 @app.get("/api/videos/{video_id}/clips")
