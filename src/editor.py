@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from loguru import logger
 from . import config
+from . import cropper
 
 PHRASE_SIZE = 3
 HOOK_DURATION = 2.5
@@ -192,6 +193,18 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     duration = clip["end"] - clip["start"]
     clip_words = _clip_words(words, clip["start"], clip["end"])
 
+    # Face-aware crop: detect speaker's horizontal position, fall back to center.
+    face_cx = cropper.detect_face_center_x(source_path, clip["start"], clip["end"])
+    if face_cx is not None:
+        # crop_w = min(iw, ih*9/16); x = clamp(iw*face_cx - crop_w/2, 0, iw - crop_w)
+        crop_filter = (
+            "crop='min(iw,ih*9/16)':ih:"
+            f"'max(0,min(iw-min(iw\\,ih*9/16),iw*{face_cx:.3f}-min(iw\\,ih*9/16)/2))':0"
+        )
+        logger.info(f"face-aware crop: center x={face_cx:.2f}")
+    else:
+        crop_filter = "crop='min(iw,ih*9/16)':ih:(iw-min(iw\\,ih*9/16))/2:0"
+
     # Detect silences and rebuild keep-ranges. If we can save >0.5s by cutting,
     # use the select+setpts filter chain; otherwise stay simple.
     keeps = _speech_keeps(clip_words, duration)
@@ -201,11 +214,9 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     if use_silence_cut:
         clip_words = _remap_words_after_cuts(clip_words, keeps)
         select_expr = _build_select_expr(keeps)
-        # select picks frames; setpts re-times the kept frames so the output is contiguous.
-        # Audio gets the parallel aselect+asetpts.
         vf = (
             f"select='{select_expr}',setpts=N/FRAME_RATE/TB,"
-            "crop='min(iw,ih*9/16)':ih:(iw-min(iw\\,ih*9/16))/2:0,"
+            f"{crop_filter},"
             "scale=1080:1920:force_original_aspect_ratio=decrease,"
             "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
             f"subtitles={ass_path.name}"
@@ -217,7 +228,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         )
     else:
         vf = (
-            "crop='min(iw,ih*9/16)':ih:(iw-min(iw\\,ih*9/16))/2:0,"
+            f"{crop_filter},"
             "scale=1080:1920:force_original_aspect_ratio=decrease,"
             "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
             f"subtitles={ass_path.name}"
