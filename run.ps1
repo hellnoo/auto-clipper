@@ -135,6 +135,22 @@ if ($haveHash -ne $reqHash) {
     Set-Content -Path $marker -Value $reqHash
 }
 
+# --- NVIDIA GPU acceleration for Whisper (one-time install) ---
+$gpuMarker = Join-Path $venv ".gpu-checked"
+if (-not (Test-Path $gpuMarker)) {
+    $hasNvidia = $false
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { $hasNvidia = $true }
+    if ($hasNvidia) {
+        Write-Host "  [..] NVIDIA GPU detected — installing CUDA libs for Whisper (~400 MB)..." -ForegroundColor Cyan
+        # ctranslate2 (the engine behind faster-whisper) needs cuDNN 9 + cuBLAS at runtime.
+        & $py -m pip install --quiet "nvidia-cublas-cu12" "nvidia-cudnn-cu12==9.*"
+        Write-Host "  [ok] GPU libs installed (Whisper will run on CUDA)" -ForegroundColor Green
+    } else {
+        Write-Host "  [info] no NVIDIA GPU detected — Whisper will run on CPU" -ForegroundColor DarkGray
+    }
+    Set-Content -Path $gpuMarker -Value (Get-Date).ToString()
+}
+
 # --- cobalt ---
 $cobaltRunning = (docker ps --filter "name=cobalt" --filter "status=running" --format "{{.Names}}" 2>$null) -eq "cobalt"
 if (-not $cobaltRunning) {

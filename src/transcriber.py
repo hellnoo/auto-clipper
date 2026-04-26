@@ -1,20 +1,73 @@
 import json
+import os
+import sys
 from pathlib import Path
 from loguru import logger
-from faster_whisper import WhisperModel
-from . import config
+
+
+def _register_cuda_dll_paths() -> None:
+    """pip-installed nvidia-cudnn-cu12 / nvidia-cublas-cu12 put their DLLs under
+    site-packages/nvidia/<lib>/bin on Windows, but ctranslate2 won't find them
+    unless we add those dirs to the DLL search path. Safe no-op if the packages
+    or directories don't exist."""
+    if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
+        return
+    try:
+        import nvidia  # type: ignore
+    except ImportError:
+        return
+    base = Path(nvidia.__file__).parent
+    for sub in ("cudnn", "cublas", "cuda_runtime", "cuda_nvrtc"):
+        d = base / sub / "bin"
+        if d.exists():
+            try:
+                os.add_dll_directory(str(d))
+            except (OSError, FileNotFoundError):
+                pass
+
+
+_register_cuda_dll_paths()
+from faster_whisper import WhisperModel  # noqa: E402
+
+from . import config  # noqa: E402
 
 _model: WhisperModel | None = None
+
+
+def _resolve_device() -> tuple[str, str]:
+    """Pick the best (device, compute_type) pair.
+
+    If WHISPER_DEVICE is left at 'auto' (or empty), try CUDA first and only
+    fall back to CPU when CUDA actually fails to load. Float16 on GPU is
+    5-10x faster than int8 on CPU for whisper-small / medium.
+    """
+    dev = (config.WHISPER_DEVICE or "auto").lower()
+    comp = config.WHISPER_COMPUTE or ""
+
+    if dev in ("cuda", "auto"):
+        # Probe CUDA cheaply by trying to load a tiny model on GPU.
+        try:
+            probe = WhisperModel("tiny", device="cuda", compute_type=comp or "float16")
+            del probe
+            return "cuda", (comp or "float16")
+        except Exception as e:
+            if dev == "cuda":
+                # User explicitly asked for CUDA — surface the error.
+                raise
+            logger.warning(f"CUDA probe failed ({type(e).__name__}: {str(e)[:120]}), falling back to CPU")
+
+    return "cpu", (comp or "int8")
 
 
 def get_model() -> WhisperModel:
     global _model
     if _model is None:
-        logger.info(f"Loading Whisper model '{config.WHISPER_MODEL}' ({config.WHISPER_DEVICE}/{config.WHISPER_COMPUTE})")
+        device, compute = _resolve_device()
+        logger.info(f"Loading Whisper model '{config.WHISPER_MODEL}' ({device}/{compute})")
         _model = WhisperModel(
             config.WHISPER_MODEL,
-            device=config.WHISPER_DEVICE,
-            compute_type=config.WHISPER_COMPUTE,
+            device=device,
+            compute_type=compute,
         )
     return _model
 
