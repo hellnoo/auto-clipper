@@ -20,24 +20,30 @@ def _esc(s) -> str:
     return html.escape(str(s), quote=True)
 
 
-job_queue: "Queue[str]" = Queue()
-_current: dict = {"url": None}
+job_queue: "Queue[tuple[str, str | int]]" = Queue()
+_current: dict = {"label": None}
 
 
 def _worker() -> None:
-    from src.main import process_url, setup_logging
+    from src.main import process_url, regenerate_video, setup_logging
     setup_logging()
     while True:
-        url = job_queue.get()
-        _current["url"] = url
+        kind, payload = job_queue.get()
+        label = f"regen vid={payload}" if kind == "regen" else str(payload)
+        _current["label"] = label
         try:
-            logger.info(f"[worker] start {url}")
-            process_url(url)
-            logger.success(f"[worker] done {url}")
+            logger.info(f"[worker] start {label}")
+            if kind == "url":
+                process_url(payload)  # type: ignore[arg-type]
+            elif kind == "regen":
+                regenerate_video(int(payload))
+            else:
+                logger.warning(f"[worker] unknown job kind: {kind}")
+            logger.success(f"[worker] done {label}")
         except Exception:
-            logger.exception(f"[worker] failed {url}")
+            logger.exception(f"[worker] failed {label}")
         finally:
-            _current["url"] = None
+            _current["label"] = None
             job_queue.task_done()
 
 
@@ -178,9 +184,25 @@ def _render_video(v: dict) -> str:
     st = v["status"] or "pending"
     terminal = {"done", "error"}
     st_class = "done" if st == "done" else ("error" if st == "error" else "running" if st not in terminal else "")
+
+    # Regenerate is only useful when source is on disk
+    can_regen = bool(v.get("path")) and Path(v["path"]).exists() if v.get("path") else False
+    regen_btn = (
+        f'<form method="post" action="/regenerate/{v["id"]}" style="display:inline">'
+        f'<button type="submit" style="padding:4px 10px;background:#222;color:#6af;'
+        f'border:1px solid #444;border-radius:4px;font-size:11px;cursor:pointer" '
+        f'title="Re-run analyze + render using cached source/transcript">↻ regenerate</button>'
+        f'</form>'
+        if can_regen else ''
+    )
+
     return (
-        f'<div class="video"><h2>{_esc(v["title"] or v["url"])}</h2>'
-        f'<div class="meta">'
+        f'<div class="video">'
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'
+        f'<h2 style="margin:0">{_esc(v["title"] or v["url"])}</h2>'
+        f'{regen_btn}'
+        f'</div>'
+        f'<div class="meta" style="margin-top:8px">'
         f'<span class="status {st_class}">{_esc(st)}</span> | '
         f'lang: {_esc(v["language"] or "?")} | '
         f'{(v["duration"] or 0):.0f}s | '
@@ -195,7 +217,7 @@ def _render_video(v: dict) -> str:
 def index() -> str:
     videos = db.list_videos()
     qsize = job_queue.qsize()
-    cur = _current["url"]
+    cur = _current["label"]
     if cur:
         queue_info = f'⚙️  Processing: <b>{_esc(cur)}</b>' + (f' (+{qsize} queued)' if qsize else '')
     elif qsize:
@@ -213,8 +235,20 @@ def submit(url: str = Form(...)) -> RedirectResponse:
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL must start with http:// or https://")
-    job_queue.put(url)
+    job_queue.put(("url", url))
     logger.info(f"queued: {url} (qsize={job_queue.qsize()})")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/regenerate/{video_id}")
+def regenerate(video_id: int) -> RedirectResponse:
+    v = db.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "video not found")
+    if not v.get("path") or not Path(v["path"]).exists():
+        raise HTTPException(409, "source mp4 missing on disk; submit the URL again")
+    job_queue.put(("regen", video_id))
+    logger.info(f"queued regen: video_id={video_id} (qsize={job_queue.qsize()})")
     return RedirectResponse("/", status_code=303)
 
 

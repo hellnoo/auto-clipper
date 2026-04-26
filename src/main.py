@@ -32,6 +32,27 @@ def setup_logging() -> None:
     logger.add(config.OUTPUT_DIR / "auto_clipper.log", rotation="10 MB", retention=3, level="DEBUG")
 
 
+def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
+    """Run the analyze + render half of the pipeline. Reused by regenerate."""
+    clips = analyzer.analyze(transcript)
+    video_id = db.upsert_video(url, status="rendering")
+    source_stem = Path(source_path).stem
+    for i, clip in enumerate(clips):
+        out = config.FINAL_DIR / f"{source_stem}_clip{i+1}.mp4"
+        clip = _snap_clip_to_words(clip, transcript["words"])
+        clip_id = db.insert_clip(video_id, i + 1, {**clip, "status": "rendering"})
+        try:
+            editor.render_clip(source_path, clip, transcript["words"], out)
+            editor.write_caption_file(clip, out.with_suffix(".txt"))
+            db.set_clip_status(clip_id, "done", str(out))
+            logger.success(f"Clip {i+1}/{len(clips)} -> {out.name}")
+        except Exception as e:
+            logger.exception(f"clip {i+1} failed")
+            db.set_clip_status(clip_id, f"error: {e}")
+    db.set_video_status(video_id, "done")
+    return len(clips)
+
+
 def process_url(url: str) -> None:
     db.init()
     vid = db.upsert_video(url, status="downloading")
@@ -42,29 +63,37 @@ def process_url(url: str) -> None:
         t = transcriber.transcribe(info["path"])
         db.upsert_video(url, language=t["language"], status="analyzing")
 
-        clips = analyzer.analyze(t)
-        db.upsert_video(url, status="rendering")
-
-        video_id = db.upsert_video(url)
-        source_stem = Path(info["path"]).stem
-        for i, clip in enumerate(clips):
-            out = config.FINAL_DIR / f"{source_stem}_clip{i+1}.mp4"
-            clip = _snap_clip_to_words(clip, t["words"])
-            clip_id = db.insert_clip(video_id, i + 1, {**clip, "status": "rendering"})
-            try:
-                editor.render_clip(info["path"], clip, t["words"], out)
-                editor.write_caption_file(clip, out.with_suffix(".txt"))
-                db.set_clip_status(clip_id, "done", str(out))
-                logger.success(f"Clip {i+1}/{len(clips)} -> {out.name}")
-            except Exception as e:
-                logger.exception(f"clip {i+1} failed")
-                db.set_clip_status(clip_id, f"error: {e}")
-
-        db.set_video_status(video_id, "done")
-        logger.success(f"Done: {info['title']} -> {len(clips)} clips")
+        n = _analyze_and_render(url, info["path"], t)
+        logger.success(f"Done: {info['title']} -> {n} clips")
     except Exception as e:
         logger.exception("pipeline failed")
         db.set_video_status(vid, "error", str(e))
+        raise
+
+
+def regenerate_video(video_id: int) -> None:
+    """Re-run analyze + render on an existing video using cached source + transcript.
+    Deletes prior clips for this video first so the dashboard shows the fresh batch."""
+    db.init()
+    v = db.get_video(video_id)
+    if not v:
+        raise ValueError(f"video {video_id} not found")
+    source_path = v.get("path")
+    if not source_path or not Path(source_path).exists():
+        raise FileNotFoundError(f"source mp4 missing for video {video_id}: {source_path}")
+
+    db.set_video_status(video_id, "analyzing")
+    # Wipe old clip rows so the new batch isn't appended.
+    with db.conn() as c:
+        c.execute("DELETE FROM clips WHERE video_id=?", (video_id,))
+
+    t = transcriber.transcribe(source_path)
+    try:
+        n = _analyze_and_render(v["url"], source_path, t)
+        logger.success(f"Regenerated: {v['title'] or v['url']} -> {n} clips")
+    except Exception as e:
+        logger.exception("regenerate failed")
+        db.set_video_status(video_id, "error", str(e))
         raise
 
 

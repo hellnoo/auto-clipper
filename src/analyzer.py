@@ -124,6 +124,36 @@ def _extract_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+# Per-1M-token pricing (USD) for cost estimation. Approximate, used only for logging.
+# Source: provider docs as of 2026-04. If your model isn't here, cost just shows "?".
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # OpenRouter / Anthropic
+    "anthropic/claude-opus-4.7":     (15.0, 75.0),
+    "anthropic/claude-sonnet-4.5":   (3.0, 15.0),
+    "anthropic/claude-sonnet-4.6":   (3.0, 15.0),
+    "anthropic/claude-haiku-4.5":    (0.80, 4.0),
+    "anthropic/claude-3.5-sonnet":   (3.0, 15.0),
+    # OpenRouter / OpenAI
+    "openai/gpt-4o":                 (2.5, 10.0),
+    "openai/gpt-4o-mini":            (0.15, 0.60),
+    "openai/o1-mini":                (3.0, 12.0),
+    # OpenRouter / Google
+    "google/gemini-2.5-flash":       (0.075, 0.30),
+    "google/gemini-2.5-pro":         (1.25, 5.0),
+    # Groq (free tier — cost is $0 but we still log token counts)
+    "llama-3.3-70b-versatile":       (0.0, 0.0),
+    "llama-3.1-8b-instant":          (0.0, 0.0),
+}
+
+
+def _estimate_cost(model: str, in_tok: int, out_tok: int) -> str:
+    p = _MODEL_PRICING.get(model)
+    if not p:
+        return f"in={in_tok} out={out_tok} cost=?"
+    cost = (in_tok * p[0] + out_tok * p[1]) / 1_000_000
+    return f"in={in_tok} out={out_tok} cost=${cost:.4f}"
+
+
 class LLMProvider(ABC):
     @abstractmethod
     def complete(self, system: str, user: str) -> str: ...
@@ -161,6 +191,9 @@ class GroqProvider(LLMProvider):
             temperature=0.3,
             max_tokens=4096,
         )
+        u = getattr(resp, "usage", None)
+        if u:
+            logger.info(f"groq[{self.model}] {_estimate_cost(self.model, u.prompt_tokens or 0, u.completion_tokens or 0)}")
         return resp.choices[0].message.content
 
 
@@ -193,6 +226,12 @@ class OpenRouterProvider(LLMProvider):
             temperature=0.3,
             max_tokens=4096,
         )
+        u = getattr(resp, "usage", None)
+        if u:
+            logger.info(
+                f"openrouter[{self.model}] "
+                f"{_estimate_cost(self.model, u.prompt_tokens or 0, u.completion_tokens or 0)}"
+            )
         return resp.choices[0].message.content
 
 
