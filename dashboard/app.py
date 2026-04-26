@@ -1,3 +1,5 @@
+import html
+import json
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,6 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from src import config, db
+
+
+def _esc(s) -> str:
+    """HTML-escape any value for safe interpolation into the dashboard."""
+    if s is None:
+        return ""
+    return html.escape(str(s), quote=True)
 
 
 job_queue: "Queue[str]" = Queue()
@@ -120,26 +129,43 @@ def _render_clip(c: dict) -> str:
     url = _media_url(c["path"])
     size = _file_size(c["path"])
     if url:
-        download_name = Path(c["path"]).name
-        video_tag = f'<video src="{url}" controls preload="metadata"></video>'
+        download_name = _esc(Path(c["path"]).name)
+        video_tag = f'<video src="{_esc(url)}" controls preload="metadata"></video>'
         download_btn = (
-            f'<a href="{url}" download="{download_name}" '
+            f'<a href="{_esc(url)}" download="{download_name}" '
             f'style="display:inline-block;padding:4px 10px;background:#063;color:#fff;'
             f'border-radius:4px;text-decoration:none;font-size:11px;font-weight:600">⬇ download</a>'
         )
     else:
         video_tag = '<div style="padding:20px;text-align:center;color:#666">no file yet</div>'
         download_btn = ''
-    size_html = f'<span style="font-size:11px;color:#888;margin-left:8px">{size}</span>' if size else ''
-    tags = " ".join(f"#{t}" for t in (c["hashtags"] or "").split(",") if t)
+    size_html = f'<span style="font-size:11px;color:#888;margin-left:8px">{_esc(size)}</span>' if size else ''
+    tags = " ".join(f"#{_esc(t)}" for t in (c["hashtags"] or "").split(",") if t)
+
+    # Emoji chips (parsed from JSON column)
+    emoji_html = ""
+    raw_emojis = c.get("emojis") if isinstance(c, dict) else None
+    if raw_emojis:
+        try:
+            arr = json.loads(raw_emojis) if isinstance(raw_emojis, str) else raw_emojis
+            if arr:
+                chips = "".join(
+                    f'<span title="{_esc(e.get("word",""))}" style="font-size:18px;margin-right:4px">{_esc(e.get("emoji",""))}</span>'
+                    for e in arr[:8] if isinstance(e, dict)
+                )
+                emoji_html = f'<div style="margin-top:6px">{chips}</div>'
+        except Exception:
+            pass
+
     st = c["status"] or "pending"
     st_class = "done" if st == "done" else ("error" if st.startswith("error") else "running" if "render" in st else "")
     return (
         f'<div class="clip">{video_tag}'
-        f'<div class="hook">{c["hook"] or ""}</div>'
-        f'<div class="caption">{c["caption"] or ""}</div>'
+        f'<div class="hook">{_esc(c["hook"])}</div>'
+        f'<div class="caption">{_esc(c["caption"])}</div>'
         f'<div class="tags">{tags}</div>'
-        f'<div style="margin-top:6px"><span class="status {st_class}">{st}</span> '
+        f'{emoji_html}'
+        f'<div style="margin-top:6px"><span class="status {st_class}">{_esc(st)}</span> '
         f'<span style="font-size:11px;color:#888">score: {(c["score"] or 0):.0f} | {c["start_sec"]:.1f}-{c["end_sec"]:.1f}s</span></div>'
         f'<div style="margin-top:8px;display:flex;align-items:center">{download_btn}{size_html}</div>'
         f'</div>'
@@ -153,12 +179,12 @@ def _render_video(v: dict) -> str:
     terminal = {"done", "error"}
     st_class = "done" if st == "done" else ("error" if st == "error" else "running" if st not in terminal else "")
     return (
-        f'<div class="video"><h2>{v["title"] or v["url"]}</h2>'
+        f'<div class="video"><h2>{_esc(v["title"] or v["url"])}</h2>'
         f'<div class="meta">'
-        f'<span class="status {st_class}">{st}</span> | '
-        f'lang: {v["language"] or "?"} | '
+        f'<span class="status {st_class}">{_esc(st)}</span> | '
+        f'lang: {_esc(v["language"] or "?")} | '
         f'{(v["duration"] or 0):.0f}s | '
-        f'<a href="{v["url"]}" target="_blank">source</a>'
+        f'<a href="{_esc(v["url"])}" target="_blank" rel="noopener">source</a>'
         f'</div>'
         f'<div class="clips">{clip_html}</div>'
         f'</div>'
@@ -171,7 +197,7 @@ def index() -> str:
     qsize = job_queue.qsize()
     cur = _current["url"]
     if cur:
-        queue_info = f'⚙️  Processing: <b>{cur}</b>' + (f' (+{qsize} queued)' if qsize else '')
+        queue_info = f'⚙️  Processing: <b>{_esc(cur)}</b>' + (f' (+{qsize} queued)' if qsize else '')
     elif qsize:
         queue_info = f'⏳ {qsize} job(s) queued'
     else:

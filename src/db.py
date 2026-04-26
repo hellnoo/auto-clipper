@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -30,10 +31,24 @@ CREATE TABLE IF NOT EXISTS clips (
     score REAL,
     path TEXT,
     status TEXT DEFAULT 'pending',
+    emojis TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(video_id) REFERENCES videos(id)
 );
 """
+
+# Migrations for older DBs that pre-date a column. Each entry is a column name
+# we expect, paired with the ALTER TABLE statement to add it.
+_MIGRATIONS = [
+    ("clips", "emojis", "ALTER TABLE clips ADD COLUMN emojis TEXT"),
+]
+
+
+def _apply_migrations(c: sqlite3.Connection) -> None:
+    for table, col, sql in _MIGRATIONS:
+        cols = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in cols:
+            c.execute(sql)
 
 
 @contextmanager
@@ -50,6 +65,7 @@ def conn():
 def init() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
+        _apply_migrations(c)
 
 
 def upsert_video(url: str, **fields: Any) -> int:
@@ -82,10 +98,11 @@ def set_video_status(video_id: int, status: str, error: str | None = None) -> No
 
 
 def insert_clip(video_id: int, idx: int, data: dict) -> int:
+    emojis_json = json.dumps(data.get("emojis") or []) if data.get("emojis") else None
     with conn() as c:
         cur = c.execute(
-            """INSERT INTO clips (video_id, idx, start_sec, end_sec, hook, caption, hashtags, score, path, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO clips (video_id, idx, start_sec, end_sec, hook, caption, hashtags, score, path, status, emojis)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 video_id,
                 idx,
@@ -97,6 +114,7 @@ def insert_clip(video_id: int, idx: int, data: dict) -> int:
                 data.get("score"),
                 data.get("path"),
                 data.get("status", "pending"),
+                emojis_json,
             ),
         )
         return cur.lastrowid
