@@ -62,7 +62,6 @@ app.mount("/media", StaticFiles(directory=str(config.OUTPUT_DIR)), name="media")
 
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Auto-Clipper</title>
-<meta http-equiv="refresh" content="15">
 <style>
  body{{font-family:system-ui,sans-serif;margin:0;background:#111;color:#eee}}
  header{{padding:16px 24px;background:#000;border-bottom:1px solid #333;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}}
@@ -100,6 +99,43 @@ PAGE = """<!doctype html>
 </header>
 <div class="queue">{queue_info}</div>
 <main>{body}</main>
+<script>
+// Poll /api/videos every 15s; only reload the page if nothing is currently
+// playing AND something actually changed (new clip count or status diff).
+// Keeps videos from getting yanked mid-playback.
+(function() {{
+  let lastSig = null;
+
+  function makeSig(data) {{
+    return (data.videos || []).map(v =>
+      `${{v.id}}:${{v.status || ''}}:${{(v.duration || 0) | 0}}`
+    ).join('|') + '||q=' + (data.queue_size || 0) + ':c=' + (data.current || '');
+  }}
+
+  function anyPlaying() {{
+    return [...document.querySelectorAll('video')].some(v => !v.paused && !v.ended);
+  }}
+
+  async function tick() {{
+    try {{
+      const r = await fetch('/api/videos', {{ cache: 'no-store' }});
+      if (!r.ok) return;
+      const data = await r.json();
+      const sig = makeSig(data);
+      if (lastSig === null) {{ lastSig = sig; return; }}
+      if (sig === lastSig) return;
+      if (anyPlaying()) return;  // user is watching, defer
+      location.reload();
+    }} catch (e) {{ /* swallow — try again next tick */ }}
+  }}
+
+  setInterval(tick, 15000);
+  // Also re-check when a video pauses/ends so we don't make the user wait
+  // up to 15s extra after they finish watching.
+  document.addEventListener('pause', () => setTimeout(tick, 500), true);
+  document.addEventListener('ended', () => setTimeout(tick, 500), true);
+}})();
+</script>
 </body></html>
 """
 
