@@ -41,14 +41,14 @@ Rank candidates by:
 Avoid: rambling intros, filler ("um", "so basically"), generic motivation, anything requiring the previous 10 minutes to understand.
 
 # Output language
-- The clip's audio is in the transcript's original language.
-- The on-screen **hook** and the **caption** MUST be written in **English** (for global TikTok / Reels / Shorts reach), even if the transcript is in another language. Translate the meaning, don't transcribe the sound.
-- Hashtags: English, lowercase, no spaces, no `#` prefix.
+- The clip's audio is in the transcript's ORIGINAL language. Match it.
+- `hook` and `caption`: write in the **same language as the transcript**. An Indonesian podcast gets Indonesian hooks; an English podcast gets English. Don't translate — viewers expect on-screen text to feel native to the audio.
+- `hashtags`: mostly the source language for the topic, plus 1-2 English crossover tags if the topic warrants it. Lowercase, no spaces, no `#` prefix.
 
 # Output fields
-- `hook`: ≤ 70 chars. On-screen text. No period at end. Punchy. English.
-- `caption`: 1-2 sentences for post description. Hook the reader, then tease the payoff. End with a CTA or question. English.
-- `hashtags`: 3-6 relevant tags (lowercase, no #).
+- `hook`: ≤ 70 chars. On-screen text. No period at end. Punchy. Use the same language as the transcript. For non-English transcripts, use the same casual register the speaker uses (e.g. Indonesian "lo/gue" vs "anda" — match what's in the transcript).
+- `caption`: 1-2 sentences for the post description, in the source language. Hook the reader, tease the payoff. End with a CTA or question.
+- `hashtags`: 3-6 relevant tags (lowercase, no #). Source language preferred.
 - `score`: 0-100. 80+ = genuinely strong, 60-79 = solid, below 60 = don't bother.
 - `emojis`: 4-8 entries. Each is `{{"word":"<single word from the clip transcript, in the original language>","emoji":"<single emoji>"}}`. Pick words that hit emotionally — money, surprise, anger, success, fail, secret, mind-blown, fire, time, etc. The emoji will pop above the caption when that word is spoken. Skip filler words. Same word may appear once.
 
