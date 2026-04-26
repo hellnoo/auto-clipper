@@ -1,5 +1,6 @@
 import html
 import json
+import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,6 +12,30 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from src import config, db
+
+
+def _silence_windows_proactor_noise() -> None:
+    """uvicorn on Windows asyncio Proactor prints a ConnectionResetError /
+    OSError traceback every time a client disconnects abruptly (tab closed
+    mid-request, mobile sleep, etc.). It's purely cosmetic — patch the
+    noisy method to swallow the harmless cases."""
+    if sys.platform != "win32":
+        return
+    try:
+        from asyncio import proactor_events
+        cls = proactor_events._ProactorBasePipeTransport
+        orig = cls._call_connection_lost
+        def quiet(self, exc):
+            try:
+                orig(self, exc)
+            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                pass
+        cls._call_connection_lost = quiet
+    except Exception:
+        pass
+
+
+_silence_windows_proactor_noise()
 
 
 def _esc(s) -> str:
