@@ -125,33 +125,128 @@ def _clip_words(all_words: list[dict], start: float, end: float) -> list[dict]:
     return out
 
 
+# --- Silence-cut helpers ---
+# Detect gaps in word timestamps > GAP_THRESHOLD; remove them so the clip
+# stays high-energy. Pads kept around each speech run so cuts don't sound
+# clipped.
+GAP_THRESHOLD = 0.45  # seconds of silence to be worth cutting
+SPEECH_PAD = 0.10     # keep this much silence around each kept run
+
+
+def _speech_keeps(words: list[dict], clip_dur: float) -> list[tuple[float, float]]:
+    """Return list of (start, end) intervals in clip-relative seconds to KEEP."""
+    if not words:
+        return [(0.0, clip_dur)]
+    keeps: list[list[float]] = []
+    for w in words:
+        s = max(0.0, w["start"] - SPEECH_PAD)
+        e = min(clip_dur, w["end"] + SPEECH_PAD)
+        if keeps and s <= keeps[-1][1] + 0.01:
+            keeps[-1][1] = max(keeps[-1][1], e)
+        else:
+            keeps.append([s, e])
+    # Filter: only count a "cut" if the gap before the next run is > threshold.
+    merged: list[list[float]] = []
+    for k in keeps:
+        if not merged:
+            merged.append(k)
+            continue
+        gap = k[0] - merged[-1][1]
+        if gap < GAP_THRESHOLD:
+            merged[-1][1] = k[1]
+        else:
+            merged.append(k)
+    return [(s, e) for s, e in merged]
+
+
+def _remap_words_after_cuts(words: list[dict], keeps: list[tuple[float, float]]) -> list[dict]:
+    """Translate word timestamps from original clip-time to post-cut clip-time."""
+    if not keeps:
+        return words
+    # Cumulative time removed before each keep range.
+    out: list[dict] = []
+    for w in words:
+        # Find which keep-range this word belongs to.
+        elapsed = 0.0
+        for s, e in keeps:
+            if w["start"] >= s and w["end"] <= e:
+                ws = w["start"] - s + elapsed
+                we = w["end"] - s + elapsed
+                out.append({"start": ws, "end": we, "word": w["word"]})
+                break
+            elapsed += e - s
+    return out
+
+
+def _build_select_expr(keeps: list[tuple[float, float]]) -> str:
+    """ffmpeg select filter expression: between(t,a,b)+between(t,c,d)+..."""
+    parts = [f"between(t,{s:.3f},{e:.3f})" for s, e in keeps]
+    return "+".join(parts) if parts else "1"
+
+
 def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path) -> Path:
     check_ffmpeg()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path = out_path.with_suffix(".ass")
-    clip_words = _clip_words(words, clip["start"], clip["end"])
-    generate_ass(clip_words, ass_path, hook=clip.get("hook"), emojis=clip.get("emojis"))
 
     duration = clip["end"] - clip["start"]
-    vf = (
-        "crop='min(iw,ih*9/16)':ih:(iw-min(iw\\,ih*9/16))/2:0,"
-        "scale=1080:1920:force_original_aspect_ratio=decrease,"
-        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"subtitles={ass_path.name}"
-    )
+    clip_words = _clip_words(words, clip["start"], clip["end"])
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{clip['start']:.3f}",
-        "-i", source_path,
-        "-t", f"{duration:.3f}",
-        "-vf", vf,
+    # Detect silences and rebuild keep-ranges. If we can save >0.5s by cutting,
+    # use the select+setpts filter chain; otherwise stay simple.
+    keeps = _speech_keeps(clip_words, duration)
+    kept_dur = sum(e - s for s, e in keeps)
+    use_silence_cut = (duration - kept_dur) > 0.5 and len(keeps) >= 2
+
+    if use_silence_cut:
+        clip_words = _remap_words_after_cuts(clip_words, keeps)
+        select_expr = _build_select_expr(keeps)
+        # select picks frames; setpts re-times the kept frames so the output is contiguous.
+        # Audio gets the parallel aselect+asetpts.
+        vf = (
+            f"select='{select_expr}',setpts=N/FRAME_RATE/TB,"
+            "crop='min(iw,ih*9/16)':ih:(iw-min(iw\\,ih*9/16))/2:0,"
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"subtitles={ass_path.name}"
+        )
+        af = f"aselect='{select_expr}',asetpts=N/SR/TB"
+        logger.info(
+            f"silence-cut: {duration:.1f}s -> {kept_dur:.1f}s "
+            f"({len(keeps)} runs, saved {duration-kept_dur:.1f}s)"
+        )
+    else:
+        vf = (
+            "crop='min(iw,ih*9/16)':ih:(iw-min(iw\\,ih*9/16))/2:0,"
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"subtitles={ass_path.name}"
+        )
+        af = None
+
+    generate_ass(clip_words, ass_path, hook=clip.get("hook"), emojis=clip.get("emojis"))
+
+    cmd = ["ffmpeg", "-y"]
+    if not use_silence_cut:
+        # Fast seek BEFORE -i for non-cut clips (much faster on big sources).
+        cmd += ["-ss", f"{clip['start']:.3f}", "-i", source_path, "-t", f"{duration:.3f}"]
+    else:
+        # For silence-cut we need accurate seek (decode-seek), so put -ss after -i scope.
+        cmd += [
+            "-ss", f"{clip['start']:.3f}",
+            "-t", f"{duration:.3f}",
+            "-i", source_path,
+        ]
+    cmd += ["-vf", vf]
+    if af:
+        cmd += ["-af", af]
+    cmd += [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         str(out_path.name),
     ]
-    logger.info(f"ffmpeg render -> {out_path.name} ({duration:.1f}s)")
+    logger.info(f"ffmpeg render -> {out_path.name} ({duration:.1f}s source)")
     result = subprocess.run(cmd, cwd=out_path.parent, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error(result.stderr[-2000:])
