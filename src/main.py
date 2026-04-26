@@ -6,24 +6,71 @@ from loguru import logger
 from . import config, db, downloader, transcriber, analyzer, editor
 
 
-def _snap_clip_to_words(clip: dict, words: list[dict], pad_start: float = 0.05, pad_end: float = 0.30) -> dict:
-    """Nudge clip start/end to the nearest word boundary so we never cut mid-syllable."""
+_SENTENCE_END = (".", "!", "?", "…")
+
+
+def _snap_clip(
+    clip: dict,
+    words: list[dict],
+    segments: list[dict] | None = None,
+    pad_start: float = 0.10,
+    pad_end: float = 0.30,
+) -> dict:
+    """Nudge clip start/end so:
+      - start lands at the beginning of a sentence (or at least a word) —
+        prefers the END of the previous sentence (so the new clip doesn't
+        catch the tail) within a 1.5s window
+      - end lands after the last sentence-ending punctuation inside the clip,
+        falling back to the last word boundary"""
     if not words:
         return clip
+
     start, end = float(clip["start"]), float(clip["end"])
 
-    snapped_start = start
-    for w in words:
-        if w["start"] >= start - 0.5:
-            snapped_start = max(0.0, w["start"] - pad_start)
-            break
+    # --- START: prefer just after a sentence-end within [start-1.5, start+0.5]
+    snapped_start = None
+    if segments:
+        candidates = [
+            s for s in segments
+            if s["end"] >= start - 1.5 and s["end"] <= start + 0.5 and s["text"].strip().endswith(_SENTENCE_END)
+        ]
+        if candidates:
+            # Pick the latest sentence-end → start of next sentence
+            best = max(candidates, key=lambda s: s["end"])
+            snapped_start = max(0.0, best["end"] + 0.05)
 
-    candidates = [w for w in words if w["end"] <= end + 0.5]
-    snapped_end = candidates[-1]["end"] + pad_end if candidates else end
+    if snapped_start is None:
+        # Fall back to nearest word boundary
+        for w in words:
+            if w["start"] >= start - 0.5:
+                snapped_start = max(0.0, w["start"] - pad_start)
+                break
+        if snapped_start is None:
+            snapped_start = start
+
+    # --- END: prefer the last sentence-end inside the clip window
+    snapped_end = None
+    if segments:
+        ends = [
+            s for s in segments
+            if s["end"] >= snapped_start and s["end"] <= end + 0.5
+            and s["text"].strip().endswith(_SENTENCE_END)
+        ]
+        if ends:
+            best = max(ends, key=lambda s: s["end"])
+            snapped_end = best["end"] + pad_end
+
+    if snapped_end is None:
+        candidates = [w for w in words if w["end"] <= end + 0.5]
+        snapped_end = candidates[-1]["end"] + pad_end if candidates else end
 
     if snapped_end - snapped_start < 5.0:
         return clip
     return {**clip, "start": snapped_start, "end": snapped_end}
+
+
+# Keep old name for any older imports
+_snap_clip_to_words = _snap_clip
 
 
 def setup_logging() -> None:
@@ -37,9 +84,10 @@ def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
     clips = analyzer.analyze(transcript)
     video_id = db.upsert_video(url, status="rendering")
     source_stem = Path(source_path).stem
+    segments = transcript.get("segments", [])
     for i, clip in enumerate(clips):
         out = config.FINAL_DIR / f"{source_stem}_clip{i+1}.mp4"
-        clip = _snap_clip_to_words(clip, transcript["words"])
+        clip = _snap_clip(clip, transcript["words"], segments)
         clip_id = db.insert_clip(video_id, i + 1, {**clip, "status": "rendering"})
         try:
             editor.render_clip(source_path, clip, transcript["words"], out)

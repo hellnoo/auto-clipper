@@ -130,8 +130,10 @@ def _clip_words(all_words: list[dict], start: float, end: float) -> list[dict]:
 # Detect gaps in word timestamps > GAP_THRESHOLD; remove them so the clip
 # stays high-energy. Pads kept around each speech run so cuts don't sound
 # clipped.
-GAP_THRESHOLD = 0.45  # seconds of silence to be worth cutting
-SPEECH_PAD = 0.10     # keep this much silence around each kept run
+GAP_THRESHOLD = 0.70  # seconds of silence to be worth cutting (conservative — keep
+                      # natural beats and short pauses; only chop genuinely dead air)
+SPEECH_PAD = 0.18     # keep this much silence around each kept run so cuts don't
+                      # sound abrupt and dramatic pauses still land
 
 
 def _speech_keeps(words: list[dict], clip_dur: float) -> list[tuple[float, float]]:
