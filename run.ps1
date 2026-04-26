@@ -7,7 +7,7 @@ Set-Location $PSScriptRoot
 # --- Banner ---
 $OutputEncoding = [Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-try { $Host.UI.RawUI.WindowTitle = "Auto-Clipper  -  by uncle_w" } catch {}
+try { $Host.UI.RawUI.WindowTitle = "Auto-Clipper  ::  kanz x claude" } catch {}
 
 $banner = @(
     "   █████╗ ██╗   ██╗████████╗ ██████╗      ██████╗██╗     ██╗██████╗ ██████╗ ███████╗██████╗",
@@ -59,18 +59,47 @@ function Type-Char($text, $color, $delay = 12) {
     }
 }
 
-Write-Host "          ┌──────────────────────────────────────────────────────────────┐" -ForegroundColor DarkGray
-Write-Host "          │  " -NoNewline -ForegroundColor DarkGray
+Write-Host "          ╔══════════════════════════════════════════════════════════════╗" -ForegroundColor DarkCyan
+Write-Host "          ║  " -NoNewline -ForegroundColor DarkCyan
 Type-Char "viral short-form clipper" White
 Write-Host "  ·  " -NoNewline -ForegroundColor DarkGray
 Type-Char "yt-dlp + whisper + groq + ffmpeg" Gray 8
-Write-Host "  │" -ForegroundColor DarkGray
-Write-Host "          │" -NoNewline -ForegroundColor DarkGray
-Write-Host "                                                  by " -NoNewline -ForegroundColor DarkGray
-Type-Char "uncle_w" Yellow 60
-Write-Host "  🎬  │" -ForegroundColor DarkGray
-Write-Host "          └──────────────────────────────────────────────────────────────┘" -ForegroundColor DarkGray
+Write-Host "  ║" -ForegroundColor DarkCyan
+Write-Host "          ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
+Write-Host "          ║                                                              ║" -ForegroundColor DarkCyan
+Write-Host "          ║" -NoNewline -ForegroundColor DarkCyan
+Write-Host "                              " -NoNewline
+Write-Host "» " -NoNewline -ForegroundColor DarkGray
+Type-Char "kanz" Yellow 80
+Write-Host " " -NoNewline
+Write-Host "×" -NoNewline -ForegroundColor Magenta
+Write-Host " " -NoNewline
+Type-Char "claude" Cyan 80
+Write-Host " " -NoNewline
+Write-Host "«" -NoNewline -ForegroundColor DarkGray
+Write-Host "                ║" -ForegroundColor DarkCyan
+Write-Host "          ║                                                              ║" -ForegroundColor DarkCyan
+Write-Host "          ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor DarkCyan
 Write-Host ""
+
+# Glow flash on the "kanz x claude" line for that extra pop
+Start-Sleep -Milliseconds 200
+$brandY = [Console]::CursorTop - 3
+$brandLine = "          ║                              » kanz × claude «                ║"
+foreach ($flash in @('White','Yellow','Cyan','DarkCyan')) {
+    [Console]::SetCursorPosition(0, $brandY)
+    Write-Host $brandLine -ForegroundColor $flash -NoNewline
+    Start-Sleep -Milliseconds 90
+}
+[Console]::SetCursorPosition(0, $brandY)
+Write-Host "          ║                              " -NoNewline -ForegroundColor DarkCyan
+Write-Host "» " -NoNewline -ForegroundColor DarkGray
+Write-Host "kanz" -NoNewline -ForegroundColor Yellow
+Write-Host " × " -NoNewline -ForegroundColor Magenta
+Write-Host "claude" -NoNewline -ForegroundColor Cyan
+Write-Host " «" -NoNewline -ForegroundColor DarkGray
+Write-Host "                ║" -ForegroundColor DarkCyan
+[Console]::SetCursorPosition(0, $brandY + 3)
 
 # --- Pre-flight checks ---
 function Need($cmd, $hint) {
