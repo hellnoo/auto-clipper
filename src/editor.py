@@ -7,8 +7,12 @@ from . import cropper
 
 PHRASE_SIZE = 3
 HOOK_DURATION = 2.5
-# Caption: white text, fat black outline, soft drop shadow.
-# Hook: huge bold yellow, thicker stroke, top-aligned with semi-transparent black panel feel.
+CAPTION_GRACE = 0.10   # buffer between hook end and caption start
+LINE_WRAP_CHARS = 22   # wrap a phrase if it would exceed this many chars
+WORD_LINGER = 0.20     # keep last word visible this long after it's sung
+# Default style is karaoke-aware: SecondaryColour = unsung (white), PrimaryColour
+# = sung (bright yellow). Karaoke \kf fills smoothly over each word's duration.
+# MarginV 600 keeps captions above the TikTok / IG bottom-UI safe zone.
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -18,8 +22,8 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Montserrat,82,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,7,3,2,80,80,360,1
-Style: Hook,Impact,108,&H0000F0FF,&H000000FF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,9,4,8,80,80,180,1
+Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,80,80,600,1
+Style: Hook,Impact,112,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,10,4,8,80,80,260,1
 Style: Emoji,Segoe UI Emoji,140,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,4,5,0,0,0,1
 
 [Events]
@@ -51,6 +55,16 @@ def _normalize_word(s: str) -> str:
     return "".join(c for c in s.lower() if c.isalnum())
 
 
+def _capitalize(text: str) -> str:
+    if not text:
+        return text
+    # Find first letter and uppercase it (handles leading punctuation/quotes)
+    for i, ch in enumerate(text):
+        if ch.isalpha():
+            return text[:i] + ch.upper() + text[i+1:]
+    return text
+
+
 def generate_ass(
     words: list[dict],
     out_path: Path,
@@ -58,8 +72,8 @@ def generate_ass(
     emojis: list[dict] | None = None,
 ) -> None:
     dialogues: list[str] = []
+
     if hook:
-        # Word-wrap long hooks so they don't run off-screen.
         hook_text = _escape_ass_text(hook.strip())
         # Pop-in scale animation + fade for impact.
         anim = r"{\fad(120,300)\t(0,200,\fscx110\fscy110)\t(200,400,\fscx100\fscy100)}"
@@ -68,10 +82,9 @@ def generate_ass(
             + anim + hook_text
         )
 
-    # Emoji pop-ups above the captions, triggered when the cued word is spoken.
+    # Emojis only fire after the hook is gone, so they don't fight for attention.
     if emojis:
-        # Build lookup: normalized-word -> emoji char (first match wins).
-        emoji_map = {}
+        emoji_map: dict[str, str] = {}
         for e in emojis:
             nw = _normalize_word(e.get("word") or "")
             if nw and nw not in emoji_map:
@@ -79,13 +92,14 @@ def generate_ass(
         emitted = 0
         used_norms: set[str] = set()
         for w in words:
+            if w["start"] < HOOK_DURATION + CAPTION_GRACE:
+                continue
             nw = _normalize_word(w["word"])
             if nw in emoji_map and nw not in used_norms:
                 emo = emoji_map[nw]
                 start_t = max(0.0, w["start"] - 0.05)
                 end_t = w["end"] + 1.4
-                # Pop in: fade + 70%->110%->100% bounce, positioned center-top.
-                pop = r"{\fad(120,300)\t(0,180,\fscx115\fscy115)\t(180,320,\fscx100\fscy100)\an5\pos(540,640)}"
+                pop = r"{\fad(120,300)\t(0,180,\fscx115\fscy115)\t(180,320,\fscx100\fscy100)\an5\pos(540,720)}"
                 dialogues.append(
                     f"Dialogue: 2,{_ass_time(start_t)},{_ass_time(end_t)},Emoji,,0,0,0,,"
                     + pop + emo
@@ -94,22 +108,41 @@ def generate_ass(
                 emitted += 1
                 if emitted >= 8:
                     break
-    for i in range(0, len(words), PHRASE_SIZE):
-        phrase = words[i : i + PHRASE_SIZE]
+
+    # Karaoke-fill captions, only after the hook period.
+    cap_start = HOOK_DURATION + CAPTION_GRACE
+    visible = [w for w in words if w["start"] >= cap_start]
+
+    for i in range(0, len(visible), PHRASE_SIZE):
+        phrase = visible[i : i + PHRASE_SIZE]
         if not phrase:
             continue
-        for j, active in enumerate(phrase):
-            parts: list[str] = []
-            for k, w in enumerate(phrase):
-                txt = _escape_ass_text(w["word"])
-                if k == j:
-                    # Active word: bright yellow, slightly bigger, bold.
-                    parts.append(r"{\c&H00F0FF&\b1\fs92}" + txt + r"{\c&HFFFFFF&\b0\fs82}")
-                else:
-                    parts.append(txt)
-            start = _ass_time(active["start"])
-            end = _ass_time(active["end"])
-            dialogues.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{' '.join(parts)}")
+        line_start = phrase[0]["start"]
+        line_end = phrase[-1]["end"] + WORD_LINGER
+
+        # Build karaoke text with word-wrap (\N) when a line gets too long.
+        rendered: list[str] = []
+        running = 0
+        for j, w in enumerate(phrase):
+            raw = w["word"].strip()
+            txt = _escape_ass_text(raw)
+            if j == 0:
+                txt = _capitalize(txt)
+            dur_cs = max(1, int(round((w["end"] - w["start"]) * 100)))
+            # Wrap before adding if this word would push past the limit.
+            if running and running + len(txt) + 1 > LINE_WRAP_CHARS:
+                rendered.append(r"\N")
+                running = 0
+            if running and not rendered[-1].endswith(r"\N"):
+                rendered.append(" ")
+                running += 1
+            rendered.append(f"{{\\kf{dur_cs}}}{txt}")
+            running += len(txt)
+        text = "".join(rendered)
+        dialogues.append(
+            f"Dialogue: 0,{_ass_time(line_start)},{_ass_time(line_end)},Default,,0,0,0,,{text}"
+        )
+
     out_path.write_text(ASS_HEADER + "\n".join(dialogues) + "\n", encoding="utf-8")
 
 
@@ -216,26 +249,36 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     if use_silence_cut:
         clip_words = _remap_words_after_cuts(clip_words, keeps)
         select_expr = _build_select_expr(keeps)
-        vf = (
-            f"select='{select_expr}',setpts=N/FRAME_RATE/TB,"
-            f"{crop_filter},"
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"subtitles={ass_path.name}"
-        )
-        af = f"aselect='{select_expr}',asetpts=N/SR/TB"
+        select_chain = f"select='{select_expr}',setpts=N/FRAME_RATE/TB,"
+        aselect_chain = f"aselect='{select_expr}',asetpts=N/SR/TB,"
+        out_dur = kept_dur
         logger.info(
             f"silence-cut: {duration:.1f}s -> {kept_dur:.1f}s "
             f"({len(keeps)} runs, saved {duration-kept_dur:.1f}s)"
         )
     else:
-        vf = (
-            f"{crop_filter},"
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"subtitles={ass_path.name}"
-        )
-        af = None
+        select_chain = ""
+        aselect_chain = ""
+        out_dur = duration
+
+    # Fade in/out — softer cut endings, more pro feel
+    fade_d = 0.15
+    fade_out_st = max(0.0, out_dur - fade_d)
+    video_fade = f"fade=t=in:st=0:d={fade_d},fade=t=out:st={fade_out_st:.3f}:d={fade_d}"
+    audio_fade = f"afade=t=in:st=0:d={fade_d},afade=t=out:st={fade_out_st:.3f}:d={fade_d}"
+
+    vf = (
+        f"{select_chain}"
+        f"{crop_filter},"
+        "scale=1080:1920:force_original_aspect_ratio=decrease,"
+        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"subtitles={ass_path.name},"
+        f"{video_fade}"
+    )
+    # loudnorm targets TikTok / IG: -14 LUFS integrated, -1.5 dBTP peak.
+    # Single-pass is fine for short-form; the dynamic-range smoothing kicks in
+    # quickly enough on 30-60 s windows.
+    af = f"{aselect_chain}loudnorm=I=-14:TP=-1.5:LRA=11,{audio_fade}"
 
     generate_ass(clip_words, ass_path, hook=clip.get("hook"), emojis=clip.get("emojis"))
 
@@ -244,18 +287,18 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         # Fast seek BEFORE -i for non-cut clips (much faster on big sources).
         cmd += ["-ss", f"{clip['start']:.3f}", "-i", source_path, "-t", f"{duration:.3f}"]
     else:
-        # For silence-cut we need accurate seek (decode-seek), so put -ss after -i scope.
         cmd += [
             "-ss", f"{clip['start']:.3f}",
             "-t", f"{duration:.3f}",
             "-i", source_path,
         ]
-    cmd += ["-vf", vf]
-    if af:
-        cmd += ["-af", af]
     cmd += [
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k",
+        "-vf", vf,
+        "-af", af,
+        # 'medium' preset on 30-60s clip is still 5-15s of CPU but the quality
+        # bump over veryfast is visible on text edges and gradients.
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
         "-movflags", "+faststart",
         str(out_path.name),
     ]
