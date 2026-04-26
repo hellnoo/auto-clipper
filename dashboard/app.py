@@ -7,7 +7,7 @@ from pathlib import Path
 from queue import Queue
 
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -85,9 +85,23 @@ app = FastAPI(title="Auto-Clipper Dashboard", lifespan=lifespan)
 app.mount("/media", StaticFiles(directory=str(config.OUTPUT_DIR)), name="media")
 
 
+_FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+    "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+    "<stop offset='0%' stop-color='#22d3ee'/>"
+    "<stop offset='50%' stop-color='#a78bfa'/>"
+    "<stop offset='100%' stop-color='#e879f9'/>"
+    "</linearGradient></defs>"
+    "<rect width='100' height='100' rx='22' fill='url(#g)'/>"
+    "<text x='50' y='70' font-size='62' text-anchor='middle' font-family='Segoe UI Emoji,Apple Color Emoji,sans-serif'>🎬</text>"
+    "</svg>"
+)
+
+
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Auto-Clipper</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -413,6 +427,12 @@ def regenerate(video_id: int) -> RedirectResponse:
     job_queue.put(("regen", video_id))
     logger.info(f"queued regen: video_id={video_id} (qsize={job_queue.qsize()})")
     return RedirectResponse("/", status_code=303)
+
+
+@app.get("/favicon.svg")
+@app.get("/favicon.ico")
+def favicon() -> Response:
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
 
 
 @app.get("/api/videos")
