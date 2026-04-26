@@ -9,21 +9,29 @@ def _register_cuda_dll_paths() -> None:
     """pip-installed nvidia-cudnn-cu12 / nvidia-cublas-cu12 put their DLLs under
     site-packages/nvidia/<lib>/bin on Windows, but ctranslate2 won't find them
     unless we add those dirs to the DLL search path. Safe no-op if the packages
-    or directories don't exist."""
+    or directories don't exist.
+
+    Note: `nvidia` is a PEP 420 namespace package, so it has no __init__.py
+    and `nvidia.__file__` is None — we have to walk __path__ instead."""
     if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
         return
     try:
         import nvidia  # type: ignore
     except ImportError:
         return
-    base = Path(nvidia.__file__).parent
-    for sub in ("cudnn", "cublas", "cuda_runtime", "cuda_nvrtc"):
-        d = base / sub / "bin"
-        if d.exists():
-            try:
-                os.add_dll_directory(str(d))
-            except (OSError, FileNotFoundError):
-                pass
+    bases = list(getattr(nvidia, "__path__", []))
+    for base_str in bases:
+        base = Path(base_str)
+        for sub in ("cublas", "cudnn", "cuda_runtime", "cuda_nvrtc"):
+            d = base / sub / "bin"
+            if d.exists():
+                try:
+                    os.add_dll_directory(str(d))
+                except (OSError, FileNotFoundError):
+                    pass
+                # Also prepend to PATH as a belt-and-braces measure for
+                # libraries that bypass the AddDllDirectory API.
+                os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
 
 
 _register_cuda_dll_paths()
