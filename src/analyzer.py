@@ -50,9 +50,10 @@ Avoid: rambling intros, filler ("um", "so basically"), generic motivation, anyth
 - `caption`: 1-2 sentences for post description. Hook the reader, then tease the payoff. End with a CTA or question. English.
 - `hashtags`: 3-6 relevant tags (lowercase, no #).
 - `score`: 0-100. 80+ = genuinely strong, 60-79 = solid, below 60 = don't bother.
+- `emojis`: 4-8 entries. Each is `{{"word":"<single word from the clip transcript, in the original language>","emoji":"<single emoji>"}}`. Pick words that hit emotionally — money, surprise, anger, success, fail, secret, mind-blown, fire, time, etc. The emoji will pop above the caption when that word is spoken. Skip filler words. Same word may appear once.
 
 Return ONLY a JSON object. No markdown fences. No prose. Exactly this shape:
-{{"clips":[{{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>}}]}}"""
+{{"clips":[{{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>,"emojis":[{{"word":"...","emoji":"..."}}]}}]}}"""
 
 
 def _condense_segments(segments: list[dict], target_chunk_sec: float = 20.0) -> list[dict]:
@@ -228,6 +229,15 @@ def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list
         if dur < abs_min or dur > abs_max:
             rejected.append(f"bad-dur:{dur:.1f}s (allowed {abs_min:.0f}-{abs_max:.0f})")
             continue
+        emojis_raw = c.get("emojis") or []
+        emojis: list[dict] = []
+        for e in emojis_raw:
+            if not isinstance(e, dict):
+                continue
+            word = str(e.get("word") or "").strip().lower()
+            emo = str(e.get("emoji") or "").strip()
+            if word and emo:
+                emojis.append({"word": word, "emoji": emo})
         valid.append({
             "start": start,
             "end": end,
@@ -235,6 +245,7 @@ def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list
             "caption": str(c.get("caption") or "").strip(),
             "hashtags": [str(h).lstrip("#").strip() for h in (c.get("hashtags") or []) if h],
             "score": float(c.get("score") or 0),
+            "emojis": emojis,
         })
     valid.sort(key=lambda x: x["score"], reverse=True)
 

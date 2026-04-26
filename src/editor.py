@@ -19,6 +19,7 @@ WrapStyle: 2
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,Montserrat,82,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,7,3,2,80,80,360,1
 Style: Hook,Impact,108,&H0000F0FF,&H000000FF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,9,4,8,80,80,180,1
+Style: Emoji,Segoe UI Emoji,140,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,4,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -45,7 +46,16 @@ def _escape_ass_text(text: str) -> str:
     return text.replace("{", "(").replace("}", ")").replace("\\", "/")
 
 
-def generate_ass(words: list[dict], out_path: Path, hook: str | None = None) -> None:
+def _normalize_word(s: str) -> str:
+    return "".join(c for c in s.lower() if c.isalnum())
+
+
+def generate_ass(
+    words: list[dict],
+    out_path: Path,
+    hook: str | None = None,
+    emojis: list[dict] | None = None,
+) -> None:
     dialogues: list[str] = []
     if hook:
         # Word-wrap long hooks so they don't run off-screen.
@@ -56,6 +66,33 @@ def generate_ass(words: list[dict], out_path: Path, hook: str | None = None) -> 
             f"Dialogue: 1,{_ass_time(0.0)},{_ass_time(HOOK_DURATION)},Hook,,0,0,0,,"
             + anim + hook_text
         )
+
+    # Emoji pop-ups above the captions, triggered when the cued word is spoken.
+    if emojis:
+        # Build lookup: normalized-word -> emoji char (first match wins).
+        emoji_map = {}
+        for e in emojis:
+            nw = _normalize_word(e.get("word") or "")
+            if nw and nw not in emoji_map:
+                emoji_map[nw] = e.get("emoji", "")
+        emitted = 0
+        used_norms: set[str] = set()
+        for w in words:
+            nw = _normalize_word(w["word"])
+            if nw in emoji_map and nw not in used_norms:
+                emo = emoji_map[nw]
+                start_t = max(0.0, w["start"] - 0.05)
+                end_t = w["end"] + 1.4
+                # Pop in: fade + 70%->110%->100% bounce, positioned center-top.
+                pop = r"{\fad(120,300)\t(0,180,\fscx115\fscy115)\t(180,320,\fscx100\fscy100)\an5\pos(540,640)}"
+                dialogues.append(
+                    f"Dialogue: 2,{_ass_time(start_t)},{_ass_time(end_t)},Emoji,,0,0,0,,"
+                    + pop + emo
+                )
+                used_norms.add(nw)
+                emitted += 1
+                if emitted >= 8:
+                    break
     for i in range(0, len(words), PHRASE_SIZE):
         phrase = words[i : i + PHRASE_SIZE]
         if not phrase:
@@ -93,7 +130,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path = out_path.with_suffix(".ass")
     clip_words = _clip_words(words, clip["start"], clip["end"])
-    generate_ass(clip_words, ass_path, hook=clip.get("hook"))
+    generate_ass(clip_words, ass_path, hook=clip.get("hook"), emojis=clip.get("emojis"))
 
     duration = clip["end"] - clip["start"]
     vf = (
