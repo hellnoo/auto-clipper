@@ -23,9 +23,12 @@ except Exception as e:  # pragma: no cover
     _CV_AVAILABLE = False
     cv2 = None  # type: ignore
 
-# YuNet ONNX model (300KB) — bundled OpenCV repo asset.
-_YUNET_URL = "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+# YuNet ONNX model (~230 KB) from OpenCV's model zoo. The model is stored via
+# Git LFS, so raw.githubusercontent.com only returns the pointer file. Use the
+# github.com /raw/ URL which follows the LFS redirect to the actual binary.
+_YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/refs/heads/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 _YUNET_PATH = Path(__file__).resolve().parent.parent / "output" / ".models" / "yunet.onnx"
+_MIN_MODEL_BYTES = 50_000  # sanity check — LFS pointer is ~130 bytes
 
 _yunet = None
 _haar_frontal = None
@@ -42,12 +45,18 @@ def _get_yunet():
     if not hasattr(cv2, "FaceDetectorYN"):
         _yunet = False
         return None
+    if _YUNET_PATH.exists() and _YUNET_PATH.stat().st_size < _MIN_MODEL_BYTES:
+        logger.warning(f"existing {_YUNET_PATH.name} is too small (LFS pointer?), redownloading")
+        _YUNET_PATH.unlink(missing_ok=True)
     if not _YUNET_PATH.exists():
         try:
             import urllib.request
             _YUNET_PATH.parent.mkdir(parents=True, exist_ok=True)
-            logger.info(f"downloading YuNet face model -> {_YUNET_PATH.name} (~300 KB, one-time)")
+            logger.info(f"downloading YuNet face model -> {_YUNET_PATH.name} (~230 KB, one-time)")
             urllib.request.urlretrieve(_YUNET_URL, _YUNET_PATH)
+            if _YUNET_PATH.stat().st_size < _MIN_MODEL_BYTES:
+                _YUNET_PATH.unlink(missing_ok=True)
+                raise RuntimeError("downloaded file too small (probably an LFS pointer)")
         except Exception as e:
             logger.warning(f"YuNet download failed ({e}); falling back to Haar")
             _yunet = False
