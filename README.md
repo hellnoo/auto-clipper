@@ -10,9 +10,27 @@ pinned: false
 
 # auto-clipper
 
-Automate short-form (TikTok/Reels/Shorts) clips from long videos — 100% free, no paid API required.
+Automate short-form (TikTok/Reels/Shorts) clips from long videos. Free path with Groq, premium path with OpenRouter (Claude / GPT-4 / Gemini).
 
-Pipeline: **yt-dlp** → **faster-whisper** (local) → **Ollama or Groq** (local/free) → **ffmpeg** (cut + 9:16 crop + burned word-by-word captions).
+Pipeline: **yt-dlp + cobalt** → **faster-whisper** (CPU/GPU) → **Groq / OpenRouter / Ollama** → **ffmpeg** with face-aware crop, silence cut, animated hook overlay, per-word caption highlight, and emoji pop-ups.
+
+See [ROADMAP.md](ROADMAP.md) for what's done, what's next, and the long-term vision.
+
+## Features
+
+- **Smart segment selection** — LLM picks 3-7 viral-worthy clips with hook + caption + hashtags + virality score
+- **Time-spread enforcement** — clips spread across the whole video, not all from the intro
+- **10 viral hook templates** — POV, Bold claim, Stat shock, Counterintuitive, etc.
+- **Face-aware crop** — OpenCV face detection drives a dynamic 9:16 viewport that follows the speaker
+- **Silence cut** — drops dead air > 450ms automatically; word-level captions stay in sync
+- **Hook overlay** — Impact 108pt with 110%→100% bounce + fade for the first 2.5 seconds
+- **Per-word caption** — Montserrat 82pt with active word popping to bright yellow 92pt
+- **Emoji pop-ups** — LLM tags emotional words; matching emojis fade-in above the caption
+- **GPU Whisper auto-detect** — CUDA float16 when an NVIDIA GPU is available, ~10x faster
+- **Cobalt fallback** — when YT blocks the host IP, fall back to a local cobalt instance using your residential IP
+- **Transcript + download caching** — re-runs are instant; you can swap LLM/prompt and Regenerate without re-transcribing
+- **Cost tracking** — per-call token usage + USD estimate logged for OpenRouter / Groq
+- **One-click Windows launcher** — `run.bat` does the whole bring-up
 
 ## Requirements
 
