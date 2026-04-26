@@ -167,27 +167,40 @@ Write-Host "  [ok] cobalt running on http://localhost:9000" -ForegroundColor Gre
 
 # --- env for the app ---
 $env:COBALT_API_URL = "http://localhost:9000"
-if (-not $env:LLM_PROVIDER) { $env:LLM_PROVIDER = "groq" }
 
-if ($env:LLM_PROVIDER -eq "groq" -and -not $env:GROQ_API_KEY) {
-    $envFile = Join-Path $PSScriptRoot "config\.env"
-    if (Test-Path $envFile) {
-        Get-Content $envFile | Where-Object { $_ -match "^\s*GROQ_API_KEY\s*=" } | ForEach-Object {
-            $env:GROQ_API_KEY = ($_ -split "=", 2)[1].Trim().Trim('"')
+# Read LLM_PROVIDER from config\.env so the rest of this script can pre-flight
+# the right credentials. Important: do NOT export $env:LLM_PROVIDER here unless
+# the user explicitly set it in their shell — otherwise it would override .env.
+$envFile = Join-Path $PSScriptRoot "config\.env"
+$dotenv = @{}
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match "^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$") {
+            $dotenv[$Matches[1]] = $Matches[2].Trim().Trim('"').Trim("'")
         }
     }
-    if (-not $env:GROQ_API_KEY) {
-        Write-Host ""
-        Write-Host "  [!] GROQ_API_KEY not set." -ForegroundColor Yellow
-        Write-Host "      Get a free key at https://console.groq.com" -ForegroundColor Yellow
-        Write-Host "      Then either:" -ForegroundColor Yellow
-        Write-Host "        - put 'GROQ_API_KEY=gsk_...' in config\.env" -ForegroundColor Yellow
-        Write-Host "        - or set `$env:GROQ_API_KEY before running this script" -ForegroundColor Yellow
-        Write-Host "      (or set LLM_PROVIDER=ollama if you have Ollama installed)" -ForegroundColor Yellow
-        Write-Host ""
-        Read-Host "  Press Enter to exit"
-        exit 1
-    }
+}
+$provider = if ($env:LLM_PROVIDER) { $env:LLM_PROVIDER } elseif ($dotenv["LLM_PROVIDER"]) { $dotenv["LLM_PROVIDER"] } else { "groq" }
+$provider = $provider.ToLower()
+
+Write-Host "  [ok] LLM provider: " -NoNewline -ForegroundColor Green
+Write-Host $provider -ForegroundColor Cyan
+
+if ($provider -eq "groq" -and -not $dotenv["GROQ_API_KEY"] -and -not $env:GROQ_API_KEY) {
+    Write-Host ""
+    Write-Host "  [!] GROQ_API_KEY not set." -ForegroundColor Yellow
+    Write-Host "      Get a free key at https://console.groq.com" -ForegroundColor Yellow
+    Write-Host "      Put 'GROQ_API_KEY=gsk_...' in config\.env then re-run." -ForegroundColor Yellow
+    Read-Host "  Press Enter to exit"
+    exit 1
+}
+if ($provider -eq "openrouter" -and -not $dotenv["OPENROUTER_API_KEY"] -and -not $env:OPENROUTER_API_KEY) {
+    Write-Host ""
+    Write-Host "  [!] OPENROUTER_API_KEY not set." -ForegroundColor Yellow
+    Write-Host "      Get a key at https://openrouter.ai/keys" -ForegroundColor Yellow
+    Write-Host "      Put 'OPENROUTER_API_KEY=sk-or-v1-...' in config\.env then re-run." -ForegroundColor Yellow
+    Read-Host "  Press Enter to exit"
+    exit 1
 }
 
 # --- launch dashboard ---
