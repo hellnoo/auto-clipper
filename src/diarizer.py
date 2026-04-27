@@ -57,17 +57,52 @@ def _load_encoder():
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    try:
-        _encoder = EncoderClassifier.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
-            savedir=str(cache_dir),
-            run_opts={"device": device},
+    base_kwargs = dict(
+        source="speechbrain/spkrec-ecapa-voxceleb",
+        savedir=str(cache_dir),
+        run_opts={"device": device},
+    )
+    # Windows without Developer Mode (or admin) can't create symlinks.
+    # speechbrain 1.x lets us force a copy via local_strategy="copy".
+    # Try the newer API first; fall back if the kwarg isn't recognised.
+    encoder = None
+    last_err = None
+    for kw in (
+        {**base_kwargs, "local_strategy": "copy"},
+        {**base_kwargs, "huggingface_cache_dir": str(cache_dir)},
+        base_kwargs,
+    ):
+        try:
+            encoder = EncoderClassifier.from_hparams(**kw)
+            break
+        except TypeError as e:
+            last_err = e  # unknown kwarg; try next variant
+            continue
+        except OSError as e:
+            if getattr(e, "winerror", None) == 1314 or "1314" in str(e):
+                last_err = e
+                logger.warning(
+                    "speechbrain symlink blocked by Windows. Will copy instead "
+                    "or fall back to next strategy..."
+                )
+                continue
+            last_err = e
+            break
+        except Exception as e:
+            last_err = e
+            break
+
+    if encoder is None:
+        logger.warning(
+            f"failed to load speechbrain encoder: {last_err}. "
+            "If this is WinError 1314, enable Windows Developer Mode "
+            "(Settings -> System -> For developers -> Developer Mode ON) "
+            "or run the launcher as administrator once to seed the cache."
         )
-        logger.info(f"speechbrain ECAPA encoder loaded on {device}")
-    except Exception as e:
-        logger.warning(f"failed to load speechbrain encoder: {e}")
         _encoder = False
         return None
+    _encoder = encoder
+    logger.info(f"speechbrain ECAPA encoder loaded on {device}")
 
     return _encoder
 
