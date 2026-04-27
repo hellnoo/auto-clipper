@@ -329,24 +329,24 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     audio_fade = f"afade=t=in:st=0:d={fade_d},afade=t=out:st={fade_out_st:.3f}:d={fade_d}"
 
     # Background blur during the hook moment — pushes the visual back so the
-    # bright hook overlay reads first. Blur strength fades from 8 to 0 over
-    # the first 2 s, then disabled.
+    # bright hook overlay reads first. boxblur's lr/cr are init-time
+    # constants in ffmpeg, so we use 'enable' to toggle the whole filter.
+    # Hard cutoff at 1.8s; the hook's own fade-out (300ms ending ~2.5s)
+    # masks the transition.
     blur_chain = ""
     if config.HOOK_BLUR_BG:
-        blur_chain = (
-            "boxblur="
-            "lr='8*(2.0-t)/2.0':cr='8*(2.0-t)/2.0':"
-            "eval=frame:enable='lt(t,2.0)',"
-        )
+        blur_chain = "boxblur=10:enable='lt(t,1.8)',"
 
     # Ken Burns: very subtle slow push-in. zoom factor drifts from 1.00 -> ~1.05
     # over ~60 s. Centered on the face-aware crop so we never lose the speaker.
+    # ffmpeg expression escapes commas with backslash, which the f-string
+    # turns from \\, into \, in the actual filter string.
     kb_chain = ""
     if config.KEN_BURNS:
         kb_chain = (
             "scale=w='1080*min(1+t*0.0009\\,1.05)':"
             "h='1920*min(1+t*0.0009\\,1.05)':eval=frame,"
-            "crop=1080:1920:(iw-1080)/2:(ih-1920)/2,"
+            "crop=w=1080:h=1920:x='(iw-1080)/2':y='(ih-1920)/2',"
         )
 
     vf = (
