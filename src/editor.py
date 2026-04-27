@@ -25,6 +25,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,80,80,600,1
 Style: Hook,Impact,112,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,10,4,8,80,80,260,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
+Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -70,13 +71,38 @@ def generate_ass(
     out_path: Path,
     hook: str | None = None,
     emojis: list[dict] | None = None,
+    clip_duration: float | None = None,
 ) -> None:
     dialogues: list[str] = []
 
+    # Watermark first (lowest layer) so it sits behind everything else.
+    if config.WATERMARK_TEXT:
+        wm_text = _escape_ass_text(config.WATERMARK_TEXT.strip())
+        # Span the whole clip; ASS subs after video end are ignored.
+        wm_end = clip_duration if clip_duration else 9999.0
+        # Slow fade in to avoid distracting from the hook moment.
+        dialogues.append(
+            f"Dialogue: 0,{_ass_time(HOOK_DURATION + 0.2)},{_ass_time(wm_end)},Watermark,,0,0,0,,"
+            + r"{\fad(400,300)}" + wm_text
+        )
+
     if hook:
         hook_text = _escape_ass_text(hook.strip())
-        # Pop-in scale animation + fade for impact.
-        anim = r"{\fad(120,300)\t(0,200,\fscx110\fscy110)\t(200,400,\fscx100\fscy100)}"
+        # Layered animation:
+        #   - pop in scale 30% -> 115% -> 100%
+        #   - fade in / fade out
+        #   - color sweep: white -> cyan -> magenta over the hook duration
+        # Color hex is &HBBGGRR. Cyan ≈ &H00F0FF (BGR), Magenta ≈ &HFF66E0.
+        anim = (
+            r"{\fad(140,350)"
+            r"\fscx30\fscy30"
+            r"\t(0,180,\fscx115\fscy115)"
+            r"\t(180,320,\fscx100\fscy100)"
+            r"\1c&H00FFFFFF&"
+            r"\t(200,1100,\1c&H00F0FF00&)"
+            r"\t(1100,2300,\1c&H00FF66E0&)"
+            r"}"
+        )
         dialogues.append(
             f"Dialogue: 1,{_ass_time(0.0)},{_ass_time(HOOK_DURATION)},Hook,,0,0,0,,"
             + anim + hook_text
@@ -171,7 +197,9 @@ def generate_ass(
                 running += 1
             rendered.append(f"{{\\kf{dur_cs}}}{txt}")
             running += len(txt)
-        text = "".join(rendered)
+        # Subtle entrance: scale 92% -> 100% over 140 ms + soft 80 ms fade-in
+        entrance = r"{\fad(80,0)\fscx92\fscy92\t(0,140,\fscx100\fscy100)}"
+        text = entrance + "".join(rendered)
         dialogues.append(
             f"Dialogue: 0,{_ass_time(line_start)},{_ass_time(line_end)},Default,,0,0,0,,{text}"
         )
@@ -300,11 +328,34 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     video_fade = f"fade=t=in:st=0:d={fade_d},fade=t=out:st={fade_out_st:.3f}:d={fade_d}"
     audio_fade = f"afade=t=in:st=0:d={fade_d},afade=t=out:st={fade_out_st:.3f}:d={fade_d}"
 
+    # Background blur during the hook moment — pushes the visual back so the
+    # bright hook overlay reads first. Blur strength fades from 8 to 0 over
+    # the first 2 s, then disabled.
+    blur_chain = ""
+    if config.HOOK_BLUR_BG:
+        blur_chain = (
+            "boxblur="
+            "lr='8*(2.0-t)/2.0':cr='8*(2.0-t)/2.0':"
+            "eval=frame:enable='lt(t,2.0)',"
+        )
+
+    # Ken Burns: very subtle slow push-in. zoom factor drifts from 1.00 -> ~1.05
+    # over ~60 s. Centered on the face-aware crop so we never lose the speaker.
+    kb_chain = ""
+    if config.KEN_BURNS:
+        kb_chain = (
+            "scale=w='1080*min(1+t*0.0009\\,1.05)':"
+            "h='1920*min(1+t*0.0009\\,1.05)':eval=frame,"
+            "crop=1080:1920:(iw-1080)/2:(ih-1920)/2,"
+        )
+
     vf = (
         f"{select_chain}"
         f"{crop_filter},"
         "scale=1080:1920:force_original_aspect_ratio=decrease,"
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"{blur_chain}"
+        f"{kb_chain}"
         f"subtitles={ass_path.name},"
         f"{video_fade}"
     )
@@ -313,7 +364,12 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     # quickly enough on 30-60 s windows.
     af = f"{aselect_chain}loudnorm=I=-14:TP=-1.5:LRA=11,{audio_fade}"
 
-    generate_ass(clip_words, ass_path, hook=clip.get("hook"), emojis=clip.get("emojis"))
+    generate_ass(
+        clip_words, ass_path,
+        hook=clip.get("hook"),
+        emojis=clip.get("emojis"),
+        clip_duration=out_dur,
+    )
 
     cmd = ["ffmpeg", "-y"]
     if not use_silence_cut:

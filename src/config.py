@@ -36,3 +36,8 @@ CLIP_MIN_SEC = int(env("CLIP_MIN_SEC", "30"))
 CLIP_MAX_SEC = int(env("CLIP_MAX_SEC", "60"))
 CLIP_COUNT_MIN = int(env("CLIP_COUNT_MIN", "3"))
 CLIP_COUNT_MAX = int(env("CLIP_COUNT_MAX", "7"))
+
+# Visual polish toggles
+WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set blank "" to disable
+KEN_BURNS = env("KEN_BURNS", "1") == "1"                 # subtle slow zoom
+HOOK_BLUR_BG = env("HOOK_BLUR_BG", "1") == "1"           # blur bg during hook
