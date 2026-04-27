@@ -41,3 +41,8 @@ CLIP_COUNT_MAX = int(env("CLIP_COUNT_MAX", "7"))
 WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set blank "" to disable
 KEN_BURNS = env("KEN_BURNS", "1") == "1"                 # subtle slow zoom
 HOOK_BLUR_BG = env("HOOK_BLUR_BG", "1") == "1"           # blur bg during hook
+
+# Speaker diarization (pyannote-audio). Requires HF_TOKEN + accepted model
+# terms at huggingface.co/pyannote/speaker-diarization-3.1 and /segmentation-3.0
+DIARIZE_ENABLED = env("DIARIZE_ENABLED", "0") == "1"
+HF_TOKEN = env("HF_TOKEN", "")

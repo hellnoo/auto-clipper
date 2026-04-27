@@ -181,12 +181,15 @@ def generate_ass(
         "&H0066FF66&",  # mint green
         "&H00FF66E0&",  # pink
     ]
-    seen_segs: dict[int, int] = {}
+    # Prefer real speaker IDs (from pyannote) when available; fall back to
+    # Whisper segment indices otherwise. Each unique key gets the next palette slot.
+    seen_keys: dict[str, int] = {}
 
-    def turn_color(seg_id: int) -> str:
-        if seg_id not in seen_segs:
-            seen_segs[seg_id] = len(seen_segs)
-        return TURN_COLORS[seen_segs[seg_id] % len(TURN_COLORS)]
+    def turn_color_for(word: dict) -> str:
+        key = word.get("speaker") or f"seg:{word.get('seg', 0)}"
+        if key not in seen_keys:
+            seen_keys[key] = len(seen_keys)
+        return TURN_COLORS[seen_keys[key] % len(TURN_COLORS)]
 
     # Build phrases first so we can look ahead and cap each phrase's end-time
     # at the next phrase's start (no visual overlap).
@@ -207,7 +210,7 @@ def generate_ass(
         else:
             line_end = natural_end
 
-        color = turn_color(int(phrase[0].get("seg", 0)))
+        color = turn_color_for(phrase[0])
 
         rendered: list[str] = []
         running = 0
@@ -251,6 +254,7 @@ def _clip_words(all_words: list[dict], start: float, end: float) -> list[dict]:
             "end": max(0.0, min(end, w["end"]) - start),
             "word": w["word"],
             "seg": w.get("seg", 0),
+            "speaker": w.get("speaker"),
         })
     return out
 
@@ -302,7 +306,11 @@ def _remap_words_after_cuts(words: list[dict], keeps: list[tuple[float, float]])
             if w["start"] >= s and w["end"] <= e:
                 ws = w["start"] - s + elapsed
                 we = w["end"] - s + elapsed
-                out.append({"start": ws, "end": we, "word": w["word"], "seg": w.get("seg", 0)})
+                out.append({
+                    "start": ws, "end": we, "word": w["word"],
+                    "seg": w.get("seg", 0),
+                    "speaker": w.get("speaker"),
+                })
                 break
             elapsed += e - s
     return out

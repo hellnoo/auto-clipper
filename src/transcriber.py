@@ -85,12 +85,38 @@ def _cache_path(audio_path: str) -> Path:
     return p.with_suffix(p.suffix + f".transcript.{config.WHISPER_MODEL}.json")
 
 
+def _maybe_apply_diarization(audio_path: str, data: dict) -> dict:
+    """If DIARIZE_ENABLED and the cached transcript doesn't already have speaker
+    labels, run diarization and stamp them on. Modifies + returns data."""
+    if not config.DIARIZE_ENABLED:
+        return data
+    words = data.get("words") or []
+    if words and "speaker" in words[0]:
+        return data  # already diarized
+    from . import diarizer
+    turns = diarizer.diarize(audio_path)
+    if not turns:
+        return data
+    diarizer.assign_speakers(words, turns)
+    # Mirror onto segment-nested words too so cache stays consistent
+    for seg in data.get("segments") or []:
+        diarizer.assign_speakers(seg.get("words") or [], turns)
+    return data
+
+
 def transcribe(audio_path: str) -> dict:
     cache = _cache_path(audio_path)
     if cache.exists():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
             logger.success(f"Loaded cached transcript: {cache.name}")
+            data = _maybe_apply_diarization(audio_path, data)
+            # Update cache if we just added speaker labels
+            if config.DIARIZE_ENABLED and data.get("words") and "speaker" in data["words"][0]:
+                try:
+                    cache.write_text(json.dumps(data), encoding="utf-8")
+                except Exception:
+                    pass
             return data
         except Exception as e:
             logger.warning(f"cache read failed ({e}), retranscribing")
@@ -130,6 +156,8 @@ def transcribe(audio_path: str) -> dict:
         "segments": segments,
         "words": words_all,
     }
+    result = _maybe_apply_diarization(audio_path, result)
+
     try:
         cache.write_text(json.dumps(result), encoding="utf-8")
         logger.info(f"cached transcript -> {cache.name}")
