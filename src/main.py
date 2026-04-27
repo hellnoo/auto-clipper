@@ -101,14 +101,17 @@ def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
     return len(clips)
 
 
-def process_url(url: str) -> None:
+def process_url(url: str, expected_speakers: int | None = None) -> None:
     db.init()
-    vid = db.upsert_video(url, status="downloading")
+    fields = {"status": "downloading"}
+    if expected_speakers is not None:
+        fields["expected_speakers"] = int(expected_speakers)
+    vid = db.upsert_video(url, **fields)
     try:
         info = downloader.download(url)
         db.upsert_video(url, title=info["title"], path=info["path"], duration=info["duration"], status="transcribing")
 
-        t = transcriber.transcribe(info["path"])
+        t = transcriber.transcribe(info["path"], expected_speakers=expected_speakers)
         db.upsert_video(url, language=t["language"], status="analyzing")
 
         n = _analyze_and_render(url, info["path"], t)
@@ -119,9 +122,8 @@ def process_url(url: str) -> None:
         raise
 
 
-def regenerate_video(video_id: int) -> None:
-    """Re-run analyze + render on an existing video using cached source + transcript.
-    Deletes prior clips for this video first so the dashboard shows the fresh batch."""
+def regenerate_video(video_id: int, expected_speakers: int | None = None) -> None:
+    """Re-run analyze + render on an existing video using cached source + transcript."""
     db.init()
     v = db.get_video(video_id)
     if not v:
@@ -130,12 +132,19 @@ def regenerate_video(video_id: int) -> None:
     if not source_path or not Path(source_path).exists():
         raise FileNotFoundError(f"source mp4 missing for video {video_id}: {source_path}")
 
+    # Persist new speaker hint when given
+    if expected_speakers is not None:
+        db.upsert_video(v["url"], expected_speakers=int(expected_speakers))
+    effective_speakers = (
+        expected_speakers if expected_speakers is not None
+        else int(v.get("expected_speakers") or 0) or None
+    )
+
     db.set_video_status(video_id, "analyzing")
-    # Wipe old clip rows so the new batch isn't appended.
     with db.conn() as c:
         c.execute("DELETE FROM clips WHERE video_id=?", (video_id,))
 
-    t = transcriber.transcribe(source_path)
+    t = transcriber.transcribe(source_path, expected_speakers=effective_speakers)
     try:
         n = _analyze_and_render(v["url"], source_path, t)
         logger.success(f"Regenerated: {v['title'] or v['url']} -> {n} clips")

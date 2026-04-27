@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS videos (
     duration REAL,
     status TEXT DEFAULT 'pending',
     error TEXT,
+    expected_speakers INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS clips (
 # we expect, paired with the ALTER TABLE statement to add it.
 _MIGRATIONS = [
     ("clips", "emojis", "ALTER TABLE clips ADD COLUMN emojis TEXT"),
+    ("videos", "expected_speakers", "ALTER TABLE videos ADD COLUMN expected_speakers INTEGER DEFAULT 0"),
 ]
 
 

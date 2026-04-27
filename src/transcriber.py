@@ -85,33 +85,44 @@ def _cache_path(audio_path: str) -> Path:
     return p.with_suffix(p.suffix + f".transcript.{config.WHISPER_MODEL}.json")
 
 
-def _maybe_apply_diarization(audio_path: str, data: dict) -> dict:
-    """If DIARIZE_ENABLED and the cached transcript doesn't already have speaker
-    labels, run diarization and stamp them on. Modifies + returns data."""
+def _maybe_apply_diarization(
+    audio_path: str, data: dict, expected_speakers: int | None = None
+) -> dict:
+    """If DIARIZE_ENABLED, run diarization and stamp speaker labels on every
+    word. Always re-runs when an explicit expected_speakers is given (so user
+    can re-cluster a cached transcript with a different speaker count)."""
     if not config.DIARIZE_ENABLED:
         return data
     words = data.get("words") or []
-    if words and "speaker" in words[0]:
-        return data  # already diarized
+    already_diarized = bool(words) and "speaker" in words[0]
+    # If user gave an explicit count, force re-cluster even if cache had labels
+    if already_diarized and not expected_speakers:
+        return data
     from . import diarizer
-    turns = diarizer.diarize(audio_path, data)
+    if expected_speakers:
+        # Wipe stale diarize cache so we re-cluster with the new k.
+        cache_path = diarizer._diarize_cache_path(audio_path)
+        if cache_path.exists():
+            try:
+                cache_path.unlink()
+            except Exception:
+                pass
+    turns = diarizer.diarize(audio_path, data, expected_speakers=expected_speakers)
     if not turns:
         return data
     diarizer.assign_speakers(words, turns)
-    # Mirror onto segment-nested words too so cache stays consistent
     for seg in data.get("segments") or []:
         diarizer.assign_speakers(seg.get("words") or [], turns)
     return data
 
 
-def transcribe(audio_path: str) -> dict:
+def transcribe(audio_path: str, expected_speakers: int | None = None) -> dict:
     cache = _cache_path(audio_path)
     if cache.exists():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
             logger.success(f"Loaded cached transcript: {cache.name}")
-            data = _maybe_apply_diarization(audio_path, data)
-            # Update cache if we just added speaker labels
+            data = _maybe_apply_diarization(audio_path, data, expected_speakers)
             if config.DIARIZE_ENABLED and data.get("words") and "speaker" in data["words"][0]:
                 try:
                     cache.write_text(json.dumps(data), encoding="utf-8")
@@ -156,7 +167,7 @@ def transcribe(audio_path: str) -> dict:
         "segments": segments,
         "words": words_all,
     }
-    result = _maybe_apply_diarization(audio_path, result)
+    result = _maybe_apply_diarization(audio_path, result, expected_speakers)
 
     try:
         cache.write_text(json.dumps(result), encoding="utf-8")

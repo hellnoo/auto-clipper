@@ -83,7 +83,11 @@ def _load_audio_16k_mono(audio_path: str):
     return waveform, sr
 
 
-def diarize(audio_path: str, transcript: dict | None = None) -> list[dict] | None:
+def diarize(
+    audio_path: str,
+    transcript: dict | None = None,
+    expected_speakers: int | None = None,
+) -> list[dict] | None:
     """Returns list of {start, end, speaker} or None when diarization can't run.
 
     Requires `transcript['segments']` — we embed each Whisper segment instead
@@ -147,7 +151,11 @@ def diarize(audio_path: str, transcript: dict | None = None) -> list[dict] | Non
         labels = _np.zeros(len(X), dtype=int)
         best_k = 1
     else:
-        forced = max(0, int(config.EXPECTED_SPEAKERS or 0))
+        # Per-call override beats global config beats auto.
+        if expected_speakers is not None and expected_speakers > 0:
+            forced = int(expected_speakers)
+        else:
+            forced = max(0, int(config.EXPECTED_SPEAKERS or 0))
         if forced >= 1:
             # User-provided hint — skip the silhouette search, just trust it.
             k_eff = min(forced, len(X))

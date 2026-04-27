@@ -45,7 +45,8 @@ def _esc(s) -> str:
     return html.escape(str(s), quote=True)
 
 
-job_queue: "Queue[tuple[str, str | int]]" = Queue()
+_Job = tuple  # (kind: str, payload: str|int, expected_speakers: int|None)
+job_queue: "Queue[_Job]" = Queue()
 _current: dict = {"label": None}
 
 
@@ -53,15 +54,18 @@ def _worker() -> None:
     from src.main import process_url, regenerate_video, setup_logging
     setup_logging()
     while True:
-        kind, payload = job_queue.get()
+        job = job_queue.get()
+        kind, payload, speakers = job[0], job[1], (job[2] if len(job) > 2 else None)
         label = f"regen vid={payload}" if kind == "regen" else str(payload)
+        if speakers:
+            label += f" ({speakers} speakers)"
         _current["label"] = label
         try:
             logger.info(f"[worker] start {label}")
             if kind == "url":
-                process_url(payload)  # type: ignore[arg-type]
+                process_url(payload, expected_speakers=speakers)  # type: ignore[arg-type]
             elif kind == "regen":
-                regenerate_video(int(payload))
+                regenerate_video(int(payload), expected_speakers=speakers)
             else:
                 logger.warning(f"[worker] unknown job kind: {kind}")
             logger.success(f"[worker] done {label}")
@@ -129,8 +133,13 @@ PAGE = """<!doctype html>
  form.submit:focus-within{{border-color:var(--cyan);box-shadow:0 0 0 4px rgba(34,211,238,0.10)}}
  form.submit input{{flex:1;padding:12px 16px;background:transparent;border:0;color:var(--text);font-size:14px;font-family:inherit;outline:none}}
  form.submit input::placeholder{{color:var(--dim)}}
+ form.submit select{{background:transparent;color:var(--muted);border:0;border-left:1px solid var(--border);padding:0 12px;font-size:12px;font-family:inherit;outline:none;cursor:pointer}}
+ form.submit select option{{background:var(--surface);color:var(--text)}}
  form.submit button{{padding:12px 20px;background:var(--grad);color:#0a0a0f;font-weight:700;font-size:13px;letter-spacing:0.02em;text-transform:uppercase;transition:opacity 0.2s}}
  form.submit button:hover{{opacity:0.9}}
+ form.regen{{display:inline-flex;align-items:center;gap:6px}}
+ form.regen select{{padding:5px 8px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:6px;font-size:11px;font-family:inherit;cursor:pointer}}
+ form.regen select option{{background:var(--surface);color:var(--text)}}
 
  /* QUEUE STRIP */
  .queue{{padding:14px 32px;font-size:13px;color:var(--muted);font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(38,38,47,0.5)}}
@@ -209,6 +218,15 @@ PAGE = """<!doctype html>
  </div>
  <form class="submit" action="/submit" method="post">
   <input type="url" name="url" required placeholder="paste a YouTube / TikTok URL…" autocomplete="off">
+  <select name="speakers" title="Speaker count for diarization (color per speaker)">
+   <option value="0">auto speakers</option>
+   <option value="1">1 speaker</option>
+   <option value="2">2 speakers</option>
+   <option value="3">3 speakers</option>
+   <option value="4">4 speakers</option>
+   <option value="5">5 speakers</option>
+   <option value="6">6 speakers</option>
+  </select>
   <button type="submit">Generate</button>
  </form>
 </header>
@@ -351,13 +369,22 @@ def _render_video(v: dict) -> str:
     st_class = "done" if st == "done" else ("error" if st == "error" else "running" if st not in terminal else "")
 
     can_regen = bool(v.get("path")) and Path(v["path"]).exists() if v.get("path") else False
-    regen_btn = (
-        f'<form method="post" action="/regenerate/{v["id"]}" style="display:inline">'
-        f'<button type="submit" class="btn-regen" '
-        f'title="Re-run analyze + render using cached source/transcript">↻ regenerate</button>'
-        f'</form>'
-        if can_regen else ''
-    )
+    current_spk = int(v.get("expected_speakers") or 0)
+    if can_regen:
+        opts = []
+        for n in range(0, 7):
+            label = "auto" if n == 0 else f"{n} speaker{'s' if n>1 else ''}"
+            sel = " selected" if n == current_spk else ""
+            opts.append(f'<option value="{n}"{sel}>{label}</option>')
+        regen_btn = (
+            f'<form class="regen" method="post" action="/regenerate/{v["id"]}">'
+            f'<select name="speakers" title="Speaker count for diarization">{"".join(opts)}</select>'
+            f'<button type="submit" class="btn-regen" '
+            f'title="Re-run analyze + render using cached source/transcript">↻ regenerate</button>'
+            f'</form>'
+        )
+    else:
+        regen_btn = ''
 
     dur = (v["duration"] or 0)
     dur_str = f'{int(dur//60)}m {int(dur%60)}s' if dur >= 60 else f'{int(dur)}s'
@@ -408,24 +435,26 @@ def index() -> str:
 
 
 @app.post("/submit")
-def submit(url: str = Form(...)) -> RedirectResponse:
+def submit(url: str = Form(...), speakers: int = Form(0)) -> RedirectResponse:
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL must start with http:// or https://")
-    job_queue.put(("url", url))
-    logger.info(f"queued: {url} (qsize={job_queue.qsize()})")
+    spk = max(0, min(int(speakers or 0), 10)) or None
+    job_queue.put(("url", url, spk))
+    logger.info(f"queued: {url} speakers={spk or 'auto'} (qsize={job_queue.qsize()})")
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/regenerate/{video_id}")
-def regenerate(video_id: int) -> RedirectResponse:
+def regenerate(video_id: int, speakers: int = Form(0)) -> RedirectResponse:
     v = db.get_video(video_id)
     if not v:
         raise HTTPException(404, "video not found")
     if not v.get("path") or not Path(v["path"]).exists():
         raise HTTPException(409, "source mp4 missing on disk; submit the URL again")
-    job_queue.put(("regen", video_id))
-    logger.info(f"queued regen: video_id={video_id} (qsize={job_queue.qsize()})")
+    spk = max(0, min(int(speakers or 0), 10)) or None
+    job_queue.put(("regen", video_id, spk))
+    logger.info(f"queued regen: video_id={video_id} speakers={spk or 'auto'} (qsize={job_queue.qsize()})")
     return RedirectResponse("/", status_code=303)
 
 
