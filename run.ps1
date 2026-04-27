@@ -116,6 +116,17 @@ Need "docker"  "Install Docker Desktop: https://www.docker.com/products/docker-d
 
 Write-Host "  [ok] python, ffmpeg, docker found" -ForegroundColor Green
 
+# --- load config\.env early so every downstream block can read it ---
+$envFile = Join-Path $PSScriptRoot "config\.env"
+$dotenv = @{}
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match "^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$") {
+            $dotenv[$Matches[1]] = $Matches[2].Trim().Trim('"').Trim("'")
+        }
+    }
+}
+
 # --- venv + deps ---
 $venv = Join-Path $PSScriptRoot ".venv"
 if (-not (Test-Path "$venv\Scripts\python.exe")) {
@@ -187,18 +198,8 @@ Write-Host "  [ok] cobalt running on http://localhost:9000" -ForegroundColor Gre
 # --- env for the app ---
 $env:COBALT_API_URL = "http://localhost:9000"
 
-# Read LLM_PROVIDER from config\.env so the rest of this script can pre-flight
-# the right credentials. Important: do NOT export $env:LLM_PROVIDER here unless
-# the user explicitly set it in their shell — otherwise it would override .env.
-$envFile = Join-Path $PSScriptRoot "config\.env"
-$dotenv = @{}
-if (Test-Path $envFile) {
-    foreach ($line in Get-Content $envFile) {
-        if ($line -match "^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$") {
-            $dotenv[$Matches[1]] = $Matches[2].Trim().Trim('"').Trim("'")
-        }
-    }
-}
+# $dotenv is loaded near the top of this script. Resolve effective LLM provider
+# without exporting $env:LLM_PROVIDER (would override the .env value).
 $provider = if ($env:LLM_PROVIDER) { $env:LLM_PROVIDER } elseif ($dotenv["LLM_PROVIDER"]) { $dotenv["LLM_PROVIDER"] } else { "groq" }
 $provider = $provider.ToLower()
 
