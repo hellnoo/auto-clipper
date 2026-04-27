@@ -173,22 +173,35 @@ if (-not (Test-Path $gpuMarker)) {
     Set-Content -Path $gpuMarker -Value (Get-Date).ToString()
 }
 
-# --- cobalt ---
-$cobaltRunning = (docker ps --filter "name=cobalt" --filter "status=running" --format "{{.Names}}" 2>$null) -eq "cobalt"
-if (-not $cobaltRunning) {
-    Write-Host "  [..] Starting cobalt (YouTube downloader)..." -ForegroundColor Cyan
-    docker rm -f cobalt 2>$null | Out-Null
-    docker run -d --name cobalt --restart unless-stopped -p 9000:9000 `
-        -e API_URL="http://localhost:9000/" `
-        -e API_PORT=9000 `
-        -e CORS_WILDCARD=1 `
-        ghcr.io/imputnet/cobalt:10 | Out-Null
-    Start-Sleep -Seconds 3
-}
-Write-Host "  [ok] cobalt running on http://localhost:9000" -ForegroundColor Green
+# --- cobalt (optional — only used as YouTube fallback) ---
+# Probe docker daemon first so a stopped Docker Desktop doesn't crash the
+# launcher with a NativeCommandError.
+$dockerUp = $false
+try {
+    $null = docker info --format "{{.ServerVersion}}" 2>$null
+    if ($LASTEXITCODE -eq 0) { $dockerUp = $true }
+} catch { $dockerUp = $false }
 
-# --- env for the app ---
-$env:COBALT_API_URL = "http://localhost:9000"
+if ($dockerUp) {
+    $cobaltRunning = (docker ps --filter "name=cobalt" --filter "status=running" --format "{{.Names}}" 2>$null) -eq "cobalt"
+    if (-not $cobaltRunning) {
+        Write-Host "  [..] Starting cobalt (YouTube downloader)..." -ForegroundColor Cyan
+        docker rm -f cobalt 2>$null | Out-Null
+        docker run -d --name cobalt --restart unless-stopped -p 9000:9000 `
+            -e API_URL="http://localhost:9000/" `
+            -e API_PORT=9000 `
+            -e CORS_WILDCARD=1 `
+            ghcr.io/imputnet/cobalt:10 | Out-Null
+        Start-Sleep -Seconds 3
+    }
+    Write-Host "  [ok] cobalt running on http://localhost:9000" -ForegroundColor Green
+    $env:COBALT_API_URL = "http://localhost:9000"
+} else {
+    Write-Host "  [!] Docker Desktop not running — skipping cobalt." -ForegroundColor Yellow
+    Write-Host "      YouTube fallback won't work, but cached videos / TikTok / Vimeo will." -ForegroundColor DarkGray
+    Write-Host "      To enable: start Docker Desktop and re-run this script." -ForegroundColor DarkGray
+    # Don't set COBALT_API_URL — downloader will skip cobalt fallback gracefully.
+}
 
 # $dotenv is loaded near the top of this script. Resolve effective LLM provider
 # without exporting $env:LLM_PROVIDER (would override the .env value).
