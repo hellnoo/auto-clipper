@@ -172,14 +172,43 @@ def generate_ass(
     cap_start = HOOK_DURATION + CAPTION_GRACE
     visible = [w for w in words if w["start"] >= cap_start]
 
-    for i in range(0, len(visible), PHRASE_SIZE):
-        phrase = visible[i : i + PHRASE_SIZE]
-        if not phrase:
-            continue
-        line_start = phrase[0]["start"]
-        line_end = phrase[-1]["end"] + WORD_LINGER
+    # Per-turn color palette. Each Whisper segment ("turn") cycles through
+    # these so consecutive turns are visually distinct without needing real
+    # speaker diarization. ASS color is &HBBGGRR with leading '&'.
+    TURN_COLORS = [
+        "&H0000F0FF&",  # bright yellow (default sung color)
+        "&H00FFE066&",  # pale cyan
+        "&H0066FF66&",  # mint green
+        "&H00FF66E0&",  # pink
+    ]
+    seen_segs: dict[int, int] = {}
 
-        # Build karaoke text with word-wrap (\N) when a line gets too long.
+    def turn_color(seg_id: int) -> str:
+        if seg_id not in seen_segs:
+            seen_segs[seg_id] = len(seen_segs)
+        return TURN_COLORS[seen_segs[seg_id] % len(TURN_COLORS)]
+
+    # Build phrases first so we can look ahead and cap each phrase's end-time
+    # at the next phrase's start (no visual overlap).
+    phrases: list[list[dict]] = []
+    for i in range(0, len(visible), PHRASE_SIZE):
+        chunk = visible[i : i + PHRASE_SIZE]
+        if chunk:
+            phrases.append(chunk)
+
+    for idx, phrase in enumerate(phrases):
+        line_start = phrase[0]["start"]
+        natural_end = phrase[-1]["end"] + WORD_LINGER
+        if idx + 1 < len(phrases):
+            next_start = phrases[idx + 1][0]["start"]
+            line_end = min(natural_end, next_start - 0.02)
+            if line_end - line_start < 0.10:  # tiny safety floor
+                line_end = line_start + 0.10
+        else:
+            line_end = natural_end
+
+        color = turn_color(int(phrase[0].get("seg", 0)))
+
         rendered: list[str] = []
         running = 0
         for j, w in enumerate(phrase):
@@ -188,7 +217,6 @@ def generate_ass(
             if j == 0:
                 txt = _capitalize(txt)
             dur_cs = max(1, int(round((w["end"] - w["start"]) * 100)))
-            # Wrap before adding if this word would push past the limit.
             if running and running + len(txt) + 1 > LINE_WRAP_CHARS:
                 rendered.append(r"\N")
                 running = 0
@@ -197,8 +225,14 @@ def generate_ass(
                 running += 1
             rendered.append(f"{{\\kf{dur_cs}}}{txt}")
             running += len(txt)
-        # Subtle entrance: scale 92% -> 100% over 140 ms + soft 80 ms fade-in
-        entrance = r"{\fad(80,0)\fscx92\fscy92\t(0,140,\fscx100\fscy100)}"
+
+        # Entrance pop-in + override the karaoke fill color for this turn
+        entrance = (
+            r"{\fad(80,0)\fscx92\fscy92"
+            r"\t(0,140,\fscx100\fscy100)"
+            f"\\1c{color}"
+            r"}"
+        )
         text = entrance + "".join(rendered)
         dialogues.append(
             f"Dialogue: 0,{_ass_time(line_start)},{_ass_time(line_end)},Default,,0,0,0,,{text}"
@@ -216,6 +250,7 @@ def _clip_words(all_words: list[dict], start: float, end: float) -> list[dict]:
             "start": max(0.0, w["start"] - start),
             "end": max(0.0, min(end, w["end"]) - start),
             "word": w["word"],
+            "seg": w.get("seg", 0),
         })
     return out
 
@@ -260,16 +295,14 @@ def _remap_words_after_cuts(words: list[dict], keeps: list[tuple[float, float]])
     """Translate word timestamps from original clip-time to post-cut clip-time."""
     if not keeps:
         return words
-    # Cumulative time removed before each keep range.
     out: list[dict] = []
     for w in words:
-        # Find which keep-range this word belongs to.
         elapsed = 0.0
         for s, e in keeps:
             if w["start"] >= s and w["end"] <= e:
                 ws = w["start"] - s + elapsed
                 we = w["end"] - s + elapsed
-                out.append({"start": ws, "end": we, "word": w["word"]})
+                out.append({"start": ws, "end": we, "word": w["word"], "seg": w.get("seg", 0)})
                 break
             elapsed += e - s
     return out

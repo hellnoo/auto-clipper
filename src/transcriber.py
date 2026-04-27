@@ -105,10 +105,15 @@ def transcribe(audio_path: str) -> dict:
     )
     segments: list[dict] = []
     words_all: list[dict] = []
-    for seg in segments_iter:
+    for seg_idx, seg in enumerate(segments_iter):
         seg_words = []
         for w in (seg.words or []):
-            wd = {"start": float(w.start), "end": float(w.end), "word": w.word.strip()}
+            wd = {
+                "start": float(w.start),
+                "end": float(w.end),
+                "word": w.word.strip(),
+                "seg": seg_idx,  # for per-turn color cycling in captions
+            }
             seg_words.append(wd)
             words_all.append(wd)
         segments.append({
@@ -116,6 +121,7 @@ def transcribe(audio_path: str) -> dict:
             "end": float(seg.end),
             "text": seg.text.strip(),
             "words": seg_words,
+            "seg": seg_idx,
         })
     logger.success(f"Transcribed: lang={info.language}, {len(segments)} segments, {len(words_all)} words")
     result = {
