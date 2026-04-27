@@ -146,22 +146,14 @@ if ($haveHash -ne $reqHash) {
     Set-Content -Path $marker -Value $reqHash
 }
 
-# --- Speaker diarization (pyannote-audio) — opt-in via DIARIZE_ENABLED=1 ---
+# --- Speaker diarization (speechbrain ECAPA, no HF auth needed) ---
 if ($dotenv["DIARIZE_ENABLED"] -eq "1") {
     $diarMarker = Join-Path $venv ".diar-installed"
     if (-not (Test-Path $diarMarker)) {
-        Write-Host "  [..] Installing pyannote.audio for speaker diarization (~2 GB)..." -ForegroundColor Cyan
-        & $py -m pip install --quiet "pyannote.audio>=3.1"
+        Write-Host "  [..] Installing speechbrain + torch for speaker diarization (~700 MB, one-time)..." -ForegroundColor Cyan
+        & $py -m pip install --quiet torch torchaudio speechbrain scikit-learn
         Set-Content -Path $diarMarker -Value (Get-Date).ToString()
-        Write-Host "  [ok] pyannote.audio installed" -ForegroundColor Green
-    }
-    if (-not $dotenv["HF_TOKEN"] -and -not $env:HF_TOKEN) {
-        Write-Host "  [!] DIARIZE_ENABLED=1 but HF_TOKEN missing." -ForegroundColor Yellow
-        Write-Host "      1. Token: https://huggingface.co/settings/tokens" -ForegroundColor Yellow
-        Write-Host "      2. Accept terms at:" -ForegroundColor Yellow
-        Write-Host "         - https://huggingface.co/pyannote/speaker-diarization-3.1" -ForegroundColor Yellow
-        Write-Host "         - https://huggingface.co/pyannote/segmentation-3.0" -ForegroundColor Yellow
-        Write-Host "      3. Add HF_TOKEN=hf_... to config\.env" -ForegroundColor Yellow
+        Write-Host "  [ok] speechbrain stack installed" -ForegroundColor Green
     }
 }
 

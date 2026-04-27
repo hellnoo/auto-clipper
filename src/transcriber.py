@@ -94,7 +94,7 @@ def _maybe_apply_diarization(audio_path: str, data: dict) -> dict:
     if words and "speaker" in words[0]:
         return data  # already diarized
     from . import diarizer
-    turns = diarizer.diarize(audio_path)
+    turns = diarizer.diarize(audio_path, data)
     if not turns:
         return data
     diarizer.assign_speakers(words, turns)
