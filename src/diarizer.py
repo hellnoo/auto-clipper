@@ -139,7 +139,6 @@ def diarize(audio_path: str, transcript: dict | None = None) -> list[dict] | Non
 
     X = _np.stack(embeddings)
 
-    # Auto-detect speaker count via silhouette
     try:
         from sklearn.cluster import AgglomerativeClustering  # type: ignore
         from sklearn.metrics import silhouette_score  # type: ignore
@@ -148,33 +147,54 @@ def diarize(audio_path: str, transcript: dict | None = None) -> list[dict] | Non
         labels = _np.zeros(len(X), dtype=int)
         best_k = 1
     else:
-        best_k = 1
-        best_score = -2.0
-        best_labels = _np.zeros(len(X), dtype=int)
-        max_k = min(5, len(X) - 1)
-        for k in range(2, max_k + 1):
-            try:
+        forced = max(0, int(config.EXPECTED_SPEAKERS or 0))
+        if forced >= 1:
+            # User-provided hint — skip the silhouette search, just trust it.
+            k_eff = min(forced, len(X))
+            if k_eff <= 1:
+                labels = _np.zeros(len(X), dtype=int)
+                best_k = 1
+            else:
                 clusterer = AgglomerativeClustering(
-                    n_clusters=k, metric="cosine", linkage="average"
+                    n_clusters=k_eff, metric="cosine", linkage="average"
                 )
-                labels_k = clusterer.fit_predict(X)
-                if len(set(labels_k)) < k:
-                    continue
-                score = silhouette_score(X, labels_k, metric="cosine")
-                if score > best_score:
-                    best_score = score
-                    best_k = k
-                    best_labels = labels_k
-            except Exception:
-                continue
-        # If silhouette is barely positive, the audio is probably mono-speaker.
-        if best_score < 0.06:
-            best_k = 1
-            best_labels = _np.zeros(len(X), dtype=int)
-            logger.info(f"diarize: silhouette={best_score:.3f} → mono speaker")
+                labels = clusterer.fit_predict(X)
+                best_k = k_eff
+            logger.info(f"diarize: EXPECTED_SPEAKERS={forced} → forcing k={best_k}")
         else:
-            logger.info(f"diarize: silhouette={best_score:.3f} → {best_k} speakers")
-        labels = best_labels
+            # Auto-detect: try k=2..6 and prefer the highest silhouette.
+            # Threshold tuned low because 3+ speaker silhouettes are naturally weaker.
+            best_k = 1
+            best_score = -2.0
+            best_labels = _np.zeros(len(X), dtype=int)
+            max_k = min(6, len(X) - 1)
+            scores: list[tuple[int, float]] = []
+            for k in range(2, max_k + 1):
+                try:
+                    clusterer = AgglomerativeClustering(
+                        n_clusters=k, metric="cosine", linkage="average"
+                    )
+                    labels_k = clusterer.fit_predict(X)
+                    if len(set(labels_k)) < k:
+                        continue
+                    score = silhouette_score(X, labels_k, metric="cosine")
+                    scores.append((k, score))
+                    if score > best_score:
+                        best_score = score
+                        best_k = k
+                        best_labels = labels_k
+                except Exception:
+                    continue
+            if best_score < 0.05:
+                best_k = 1
+                best_labels = _np.zeros(len(X), dtype=int)
+                logger.info(f"diarize: silhouette={best_score:.3f} → mono speaker (set EXPECTED_SPEAKERS=N to force)")
+            else:
+                logger.info(
+                    f"diarize: best silhouette={best_score:.3f} at k={best_k} "
+                    f"(all: {scores}). Override with EXPECTED_SPEAKERS=N if wrong."
+                )
+            labels = best_labels
 
     # Map cluster ids back to segments. Segments we couldn't embed inherit
     # from the previous embedded one (or 0).

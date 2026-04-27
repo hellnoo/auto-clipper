@@ -42,7 +42,10 @@ WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set blank "" to disa
 KEN_BURNS = env("KEN_BURNS", "1") == "1"                 # subtle slow zoom
 HOOK_BLUR_BG = env("HOOK_BLUR_BG", "1") == "1"           # blur bg during hook
 
-# Speaker diarization (pyannote-audio). Requires HF_TOKEN + accepted model
-# terms at huggingface.co/pyannote/speaker-diarization-3.1 and /segmentation-3.0
+# Speaker diarization (speechbrain ECAPA, no HF auth needed).
+# EXPECTED_SPEAKERS:
+#   0 = auto-detect via silhouette (good for 1-2 speakers)
+#   N = force exactly N speakers (use this when you KNOW the host count;
+#       jumps quality from ~65% to ~85% on 3+ speaker podcasts)
 DIARIZE_ENABLED = env("DIARIZE_ENABLED", "0") == "1"
-HF_TOKEN = env("HF_TOKEN", "")
+EXPECTED_SPEAKERS = int(env("EXPECTED_SPEAKERS", "0"))
