@@ -37,10 +37,14 @@ CLIP_MAX_SEC = int(env("CLIP_MAX_SEC", "60"))
 CLIP_COUNT_MIN = int(env("CLIP_COUNT_MIN", "3"))
 CLIP_COUNT_MAX = int(env("CLIP_COUNT_MAX", "7"))
 
-# Visual polish toggles
-WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set blank "" to disable
-KEN_BURNS = env("KEN_BURNS", "1") == "1"                 # subtle slow zoom
-HOOK_BLUR_BG = env("HOOK_BLUR_BG", "1") == "1"           # blur bg during hook
+# Visual polish toggles. Defaults conservative — anything that risks
+# playback issues (timestamp splices, dynamic filters) defaults OFF.
+# Toggle to "1" in .env to opt back in when you've validated stability.
+WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set "" to disable
+SILENCE_CUT = env("SILENCE_CUT", "0") == "1"             # cut dead air > 700ms (PTS-heavy)
+KEN_BURNS = env("KEN_BURNS", "0") == "1"                 # slow zoom (eval=frame, can cause
+                                                          # browser-stall on some Windows builds)
+HOOK_BLUR_BG = env("HOOK_BLUR_BG", "0") == "1"           # blur bg during hook
 
 # Speaker diarization (speechbrain ECAPA, no HF auth needed).
 # EXPECTED_SPEAKERS:

@@ -387,9 +387,16 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
 
     # Detect silences and rebuild keep-ranges. If we can save >0.5s by cutting,
     # use the select+setpts filter chain; otherwise stay simple.
-    keeps = _speech_keeps(clip_words, duration)
-    kept_dur = sum(e - s for s, e in keeps)
-    use_silence_cut = (duration - kept_dur) > 0.5 and len(keeps) >= 2
+    # Gated by config.SILENCE_CUT — opt-in because select+setpts can produce
+    # PTS-inconsistent output that some browsers stall on.
+    if config.SILENCE_CUT:
+        keeps = _speech_keeps(clip_words, duration)
+        kept_dur = sum(e - s for s, e in keeps)
+        use_silence_cut = (duration - kept_dur) > 0.5 and len(keeps) >= 2
+    else:
+        keeps = []
+        kept_dur = duration
+        use_silence_cut = False
 
     if use_silence_cut:
         clip_words = _remap_words_after_cuts(clip_words, keeps)
@@ -468,9 +475,15 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
     cmd += [
         "-vf", vf,
         "-af", af,
-        # 'medium' preset on 30-60s clip is still 5-15s of CPU but the quality
-        # bump over veryfast is visible on text edges and gradients.
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        # Force a stable 30 fps output and rebuild PTS timestamps from the
+        # decoded frame rate. Without this, browsers can stall on streams
+        # whose container PTS jumps (e.g. after silence-cut splices).
+        "-r", "30",
+        "-vsync", "cfr",
+        "-fps_mode", "cfr",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-profile:v", "high", "-level", "4.0",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
         "-movflags", "+faststart",
         str(out_path.name),
