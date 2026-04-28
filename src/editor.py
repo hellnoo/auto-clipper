@@ -23,7 +23,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,100,100,600,1
-Style: Hook,Impact,92,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,8,120,120,210,1
+Style: Hook,Impact,72,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,8,140,140,200,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
 Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
 
@@ -103,10 +103,29 @@ def generate_ass(
         )
 
     if hook:
-        # Wrap long hook into 2 lines so it fits the 9:16 frame width.
-        HOOK_WRAP_CHARS = 22
+        # Auto-fit hook into the 9:16 frame. Rules tuned for Impact font:
+        #   < 16 chars  -> 1 line at base 72pt
+        #   16-32 chars -> 2 lines at 72pt
+        #   33-50 chars -> 2 lines at 60pt
+        #   > 50 chars  -> 2 lines at 50pt + truncate at 60 chars
         cleaned = hook.strip().rstrip(".!?,")
-        if len(cleaned) > HOOK_WRAP_CHARS:
+        if len(cleaned) > 60:
+            cleaned = cleaned[:57].rsplit(" ", 1)[0] + "…"
+        n = len(cleaned)
+        if n < 16:
+            hook_size_override = ""
+            hook_text = _escape_ass_text(cleaned)
+        else:
+            # Pick font size proportional to length so it always fits 2 lines.
+            if n <= 32:
+                fs = 72
+            elif n <= 50:
+                fs = 60
+            else:
+                fs = 50
+            hook_size_override = rf"\fs{fs}"
+
+            # Split as close to the middle as possible at a word boundary.
             words_h = cleaned.split()
             target = len(cleaned) // 2
             best_idx, best_diff = 1, len(cleaned)
@@ -120,8 +139,6 @@ def generate_ass(
             line1 = " ".join(words_h[:best_idx])
             line2 = " ".join(words_h[best_idx:])
             hook_text = _escape_ass_text(line1) + r"\N" + _escape_ass_text(line2)
-        else:
-            hook_text = _escape_ass_text(cleaned)
         # Layered animation:
         #   - pop in scale 30% -> 115% -> 100%
         #   - fade in / fade out
@@ -129,6 +146,7 @@ def generate_ass(
         # Color hex is &HBBGGRR. Cyan ≈ &H00F0FF (BGR), Magenta ≈ &HFF66E0.
         anim = (
             r"{\fad(140,350)"
+            + hook_size_override +
             r"\fscx30\fscy30"
             r"\t(0,180,\fscx115\fscy115)"
             r"\t(180,320,\fscx100\fscy100)"
