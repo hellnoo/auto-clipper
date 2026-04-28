@@ -56,6 +56,22 @@ def _normalize_word(s: str) -> str:
     return "".join(c for c in s.lower() if c.isalnum())
 
 
+# Conservative filler list — these are real disfluencies, not loaded words.
+# Skipping ID particles like "kan", "ya", "lo", "gue" because they can be
+# meaning-bearing and audio still says them either way.
+_FILLERS = {
+    "um", "uhm", "uh", "uhh", "uhhh",
+    "eh", "ehh", "ehm", "em", "emm",
+    "ah", "ahh", "oh", "ohh",
+    "hmm", "hmmm", "mm", "mmm",
+}
+
+
+def _is_filler(word: str) -> bool:
+    norm = "".join(c for c in word.lower() if c.isalnum())
+    return norm in _FILLERS
+
+
 def _capitalize(text: str) -> str:
     if not text:
         return text
@@ -168,21 +184,24 @@ def generate_ass(
                 if emitted >= 10:
                     break
 
-    # Karaoke-fill captions, only after the hook period.
+    # Captions: per-word pop-in build-up, only after the hook period.
+    # Each phrase shows N words on screen; as each word starts, it pops in
+    # while previously-shown words stay visible (dimmed). Submagic style.
     cap_start = HOOK_DURATION + CAPTION_GRACE
-    visible = [w for w in words if w["start"] >= cap_start]
+    visible = [
+        w for w in words
+        if w["start"] >= cap_start and not _is_filler(w["word"])
+    ]
 
-    # Per-turn color palette. Each Whisper segment ("turn") cycles through
-    # these so consecutive turns are visually distinct without needing real
-    # speaker diarization. ASS color is &HBBGGRR with leading '&'.
+    # Per-turn color palette.
     TURN_COLORS = [
-        "&H0000F0FF&",  # bright yellow (default sung color)
+        "&H0000F0FF&",  # bright yellow
         "&H00FFE066&",  # pale cyan
         "&H0066FF66&",  # mint green
         "&H00FF66E0&",  # pink
     ]
-    # Prefer real speaker IDs (from pyannote) when available; fall back to
-    # Whisper segment indices otherwise. Each unique key gets the next palette slot.
+    DIM_COLOR = "&H00C0C0C0&"  # already-said words
+
     seen_keys: dict[str, int] = {}
 
     def turn_color_for(word: dict) -> str:
@@ -191,55 +210,61 @@ def generate_ass(
             seen_keys[key] = len(seen_keys)
         return TURN_COLORS[seen_keys[key] % len(TURN_COLORS)]
 
-    # Build phrases first so we can look ahead and cap each phrase's end-time
-    # at the next phrase's start (no visual overlap).
+    # Group into phrases of PHRASE_SIZE words.
     phrases: list[list[dict]] = []
     for i in range(0, len(visible), PHRASE_SIZE):
         chunk = visible[i : i + PHRASE_SIZE]
         if chunk:
             phrases.append(chunk)
 
-    for idx, phrase in enumerate(phrases):
-        line_start = phrase[0]["start"]
-        natural_end = phrase[-1]["end"] + WORD_LINGER
-        if idx + 1 < len(phrases):
-            next_start = phrases[idx + 1][0]["start"]
-            line_end = min(natural_end, next_start - 0.02)
-            if line_end - line_start < 0.10:  # tiny safety floor
-                line_end = line_start + 0.10
-        else:
-            line_end = natural_end
+    # Per-word pop animation tag (from base 80% to 115% to 100% over ~180ms).
+    POP_ANIM = r"\t(0,90,\fscx115\fscy115)\t(90,180,\fscx100\fscy100)"
 
+    for p_idx, phrase in enumerate(phrases):
         color = turn_color_for(phrase[0])
+        # Where this phrase as a whole ends: next phrase start, or last
+        # word + linger.
+        if p_idx + 1 < len(phrases):
+            phrase_end = phrases[p_idx + 1][0]["start"] - 0.02
+        else:
+            phrase_end = phrase[-1]["end"] + WORD_LINGER
+        # Each word inside emits its own Dialogue covering [w.start, next_word.start]
+        # (or phrase_end for the last word). Text is the cumulative phrase up to
+        # and including this word, with the new word popped + colored, prior
+        # words dimmed.
+        for w_idx, w in enumerate(phrase):
+            dlg_start = w["start"]
+            if w_idx + 1 < len(phrase):
+                dlg_end = phrase[w_idx + 1]["start"] - 0.01
+            else:
+                dlg_end = phrase_end
+            if dlg_end - dlg_start < 0.05:
+                dlg_end = dlg_start + 0.05
 
-        rendered: list[str] = []
-        running = 0
-        for j, w in enumerate(phrase):
-            raw = w["word"].strip()
-            txt = _escape_ass_text(raw)
-            if j == 0:
-                txt = _capitalize(txt)
-            dur_cs = max(1, int(round((w["end"] - w["start"]) * 100)))
-            if running and running + len(txt) + 1 > LINE_WRAP_CHARS:
-                rendered.append(r"\N")
-                running = 0
-            if running and not rendered[-1].endswith(r"\N"):
-                rendered.append(" ")
-                running += 1
-            rendered.append(f"{{\\kf{dur_cs}}}{txt}")
-            running += len(txt)
+            parts: list[str] = []
+            running = 0
+            for j in range(w_idx + 1):
+                raw_j = phrase[j]["word"].strip()
+                txt_j = _escape_ass_text(raw_j)
+                if j == 0:
+                    txt_j = _capitalize(txt_j)
+                if running and running + len(txt_j) + 1 > LINE_WRAP_CHARS:
+                    parts.append(r"\N")
+                    running = 0
+                if running and not parts[-1].endswith(r"\N"):
+                    parts.append(" ")
+                    running += 1
+                if j < w_idx:
+                    parts.append(f"{{\\1c{DIM_COLOR}\\fscx100\\fscy100}}{txt_j}")
+                else:
+                    parts.append(f"{{\\1c{color}\\fscx80\\fscy80{POP_ANIM}}}{txt_j}")
+                running += len(txt_j)
 
-        # Entrance pop-in + override the karaoke fill color for this turn
-        entrance = (
-            r"{\fad(80,0)\fscx92\fscy92"
-            r"\t(0,140,\fscx100\fscy100)"
-            f"\\1c{color}"
-            r"}"
-        )
-        text = entrance + "".join(rendered)
-        dialogues.append(
-            f"Dialogue: 0,{_ass_time(line_start)},{_ass_time(line_end)},Default,,0,0,0,,{text}"
-        )
+            entrance = r"{\fad(60,0)}" if w_idx == 0 else r"{\fad(0,0)}"
+            text = entrance + "".join(parts)
+            dialogues.append(
+                f"Dialogue: 0,{_ass_time(dlg_start)},{_ass_time(dlg_end)},Default,,0,0,0,,{text}"
+            )
 
     out_path.write_text(ASS_HEADER + "\n".join(dialogues) + "\n", encoding="utf-8")
 
