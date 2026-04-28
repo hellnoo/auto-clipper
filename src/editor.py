@@ -18,12 +18,12 @@ ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
 ScaledBorderAndShadow: yes
-WrapStyle: 2
+WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,80,80,600,1
-Style: Hook,Impact,112,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,10,4,8,80,80,260,1
+Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,100,100,600,1
+Style: Hook,Impact,92,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,8,120,120,210,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
 Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
 
@@ -103,7 +103,25 @@ def generate_ass(
         )
 
     if hook:
-        hook_text = _escape_ass_text(hook.strip())
+        # Wrap long hook into 2 lines so it fits the 9:16 frame width.
+        HOOK_WRAP_CHARS = 22
+        cleaned = hook.strip().rstrip(".!?,")
+        if len(cleaned) > HOOK_WRAP_CHARS:
+            words_h = cleaned.split()
+            target = len(cleaned) // 2
+            best_idx, best_diff = 1, len(cleaned)
+            cum = 0
+            for i, w in enumerate(words_h[:-1]):
+                cum += len(w) + 1
+                diff = abs(cum - target)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_idx = i + 1
+            line1 = " ".join(words_h[:best_idx])
+            line2 = " ".join(words_h[best_idx:])
+            hook_text = _escape_ass_text(line1) + r"\N" + _escape_ass_text(line2)
+        else:
+            hook_text = _escape_ass_text(cleaned)
         # Layered animation:
         #   - pop in scale 30% -> 115% -> 100%
         #   - fade in / fade out
