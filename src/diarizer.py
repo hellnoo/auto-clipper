@@ -57,39 +57,55 @@ def _load_encoder():
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Try to import the LocalStrategy enum (speechbrain 1.x). Older versions
+    # don't expose it; we'll just skip that variant.
+    LocalStrategy = None
+    try:
+        from speechbrain.utils.fetching import LocalStrategy as _LS  # type: ignore
+        LocalStrategy = _LS
+    except Exception:
+        pass
+
     base_kwargs = dict(
         source="speechbrain/spkrec-ecapa-voxceleb",
         savedir=str(cache_dir),
         run_opts={"device": device},
     )
-    # Windows without Developer Mode (or admin) can't create symlinks.
-    # speechbrain 1.x lets us force a copy via local_strategy="copy".
-    # Try the newer API first; fall back if the kwarg isn't recognised.
+
+    # Try strategies in order of preference. COPY avoids the Windows
+    # symlink-permission trap (WinError 1314).
+    variants: list[dict] = []
+    if LocalStrategy is not None:
+        # Each speechbrain release names enum members slightly differently;
+        # try every plausible 'copy' value.
+        for candidate in ("COPY", "COPY_SKIP_CACHE", "NO_LINK", "NO"):
+            if hasattr(LocalStrategy, candidate):
+                variants.append({**base_kwargs, "local_strategy": getattr(LocalStrategy, candidate)})
+                break
+    variants.append({**base_kwargs, "huggingface_cache_dir": str(cache_dir)})
+    variants.append(base_kwargs)
+
     encoder = None
     last_err = None
-    for kw in (
-        {**base_kwargs, "local_strategy": "copy"},
-        {**base_kwargs, "huggingface_cache_dir": str(cache_dir)},
-        base_kwargs,
-    ):
+    for kw in variants:
         try:
             encoder = EncoderClassifier.from_hparams(**kw)
             break
         except TypeError as e:
-            last_err = e  # unknown kwarg; try next variant
+            last_err = e
             continue
         except OSError as e:
-            if getattr(e, "winerror", None) == 1314 or "1314" in str(e):
-                last_err = e
-                logger.warning(
-                    "speechbrain symlink blocked by Windows. Will copy instead "
-                    "or fall back to next strategy..."
-                )
-                continue
             last_err = e
+            if getattr(e, "winerror", None) == 1314 or "1314" in str(e):
+                logger.warning("speechbrain symlink blocked, trying next strategy...")
+                continue
             break
         except Exception as e:
             last_err = e
+            # 'Illegal local strategy' style errors — try next variant
+            if "local strategy" in str(e).lower() or "linking" in str(e).lower():
+                continue
             break
 
     if encoder is None:
@@ -97,7 +113,7 @@ def _load_encoder():
             f"failed to load speechbrain encoder: {last_err}. "
             "If this is WinError 1314, enable Windows Developer Mode "
             "(Settings -> System -> For developers -> Developer Mode ON) "
-            "or run the launcher as administrator once to seed the cache."
+            "or run the launcher as administrator once."
         )
         _encoder = False
         return None
