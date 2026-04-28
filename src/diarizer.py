@@ -124,14 +124,42 @@ def _load_encoder():
 
 
 def _load_audio_16k_mono(audio_path: str):
-    """Returns (waveform_tensor, sample_rate) at 16 kHz mono."""
-    waveform, sr = _torchaudio.load(audio_path)
-    if waveform.shape[0] > 1:  # stereo -> mono
-        waveform = waveform.mean(dim=0, keepdim=True)
-    if sr != 16000:
-        waveform = _torchaudio.transforms.Resample(sr, 16000)(waveform)
-        sr = 16000
-    return waveform, sr
+    """Returns (waveform_tensor [1, samples], sample_rate=16000).
+
+    Uses ffmpeg to extract + resample directly to 16 kHz mono wav, then loads
+    with soundfile. Avoids torchaudio.load which (in 2.10+) requires
+    torchcodec — and torchcodec on Windows needs the 'full-shared' ffmpeg
+    build with separate DLLs that the user typically doesn't have."""
+    import subprocess
+    import tempfile
+    import os
+    import soundfile as sf  # type: ignore
+
+    fd, wav_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", audio_path,
+                "-ar", "16000", "-ac", "1",
+                "-vn", "-c:a", "pcm_s16le",
+                wav_path,
+            ],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg audio extract failed: {proc.stderr[-400:]}")
+        data, sr = sf.read(wav_path, dtype="float32")
+        if data.ndim == 2:
+            data = data.mean(axis=1)
+        waveform = _torch.from_numpy(data).unsqueeze(0)
+        return waveform, sr
+    finally:
+        try:
+            os.unlink(wav_path)
+        except Exception:
+            pass
 
 
 def diarize(
