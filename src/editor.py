@@ -26,6 +26,7 @@ Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0
 Style: Hook,Impact,72,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,8,140,140,200,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
 Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
+Style: EndCard,Impact,68,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,2,100,100,360,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -144,9 +145,20 @@ def generate_ass(
         #   - fade in / fade out
         #   - color sweep: white -> cyan -> magenta over the hook duration
         # Color hex is &HBBGGRR. Cyan ≈ &H00F0FF (BGR), Magenta ≈ &HFF66E0.
+        # Hook position presets — alignment 8 (top-center) means style MarginV
+        # measures from the top. The hook centers horizontally at PlayResX/2 = 540,
+        # and starts at y=200 (style MarginV). We \move it up by ~80px in the last
+        # 400ms so it exits with a slide rather than just fading.
+        hook_x = 540
+        hook_y_start = 200
+        hook_y_end = hook_y_start - 80
+        hook_t_exit_start = int((HOOK_DURATION - 0.4) * 1000)
+        hook_t_exit_end = int(HOOK_DURATION * 1000)
         anim = (
             r"{\fad(140,350)"
             + hook_size_override +
+            f"\\an8\\move({hook_x},{hook_y_start},{hook_x},{hook_y_end},"
+            f"{hook_t_exit_start},{hook_t_exit_end})"
             r"\fscx30\fscy30"
             r"\t(0,180,\fscx115\fscy115)"
             r"\t(180,320,\fscx100\fscy100)"
@@ -193,23 +205,50 @@ def generate_ass(
                 start_t = max(0.0, w["start"] - 0.05)
                 end_t = w["end"] + 1.6
                 px, py = scatter[emitted % len(scatter)]
-                # Alternate rotation direction for variety
-                rot_in = -10 if emitted % 2 == 0 else 10
-                # Layered animation:
-                #  0-160ms   : pop in, scale 30%->145%, rotate from rot_in to 0
-                #  160-300ms : settle to 100% with slight overshoot
-                #  900-1500ms: breathe out 100%->110%
-                #  1500-2000ms: breathe back 110%->100%
-                # Plus fade-in 150ms / fade-out 400ms for soft edges.
+                rot_in = -12 if emitted % 2 == 0 else 12
+                # Rotate through 4 entrance styles for variety. All settle to
+                # 100% scale at center-anchored position with idle breathing.
+                style = emitted % 4
+                if style == 0:
+                    # Bounce: tiny -> overshoot -> settle, with tilt
+                    entry = (
+                        rf"\an5\pos({px},{py})"
+                        rf"\fscx30\fscy30\frz{rot_in}"
+                        rf"\t(0,160,\fscx145\fscy145\frz0)"
+                        r"\t(160,300,\fscx100\fscy100)"
+                    )
+                elif style == 1:
+                    # Spin: scale 60%->100% with full -180° spin
+                    entry = (
+                        rf"\an5\pos({px},{py})"
+                        r"\fscx60\fscy60\frz-180"
+                        r"\t(0,320,\fscx108\fscy108\frz0)"
+                        r"\t(320,480,\fscx100\fscy100)"
+                    )
+                elif style == 2:
+                    # Drop from above: \move down + tiny squash on landing
+                    drop_from = max(80, py - 240)
+                    entry = (
+                        rf"\an5\fscy85\fscx115"
+                        rf"\move({px},{drop_from},{px},{py},0,260)"
+                        r"\t(260,360,\fscx95\fscy120)"
+                        r"\t(360,460,\fscx100\fscy100)"
+                    )
+                else:
+                    # Rocket up from below
+                    rise_from = min(1700, py + 240)
+                    entry = (
+                        rf"\an5\fscx100\fscy100"
+                        rf"\move({px},{rise_from},{px},{py},0,300)"
+                        r"\t(300,420,\fscx110\fscy110)"
+                        r"\t(420,540,\fscx100\fscy100)"
+                    )
                 anim = (
                     r"{\fad(150,400)"
-                    rf"\an5\pos({px},{py})"
-                    rf"\fscx30\fscy30\frz{rot_in}"
-                    rf"\t(0,160,\fscx145\fscy145\frz0)"
-                    r"\t(160,300,\fscx100\fscy100)"
-                    r"\t(900,1500,\fscx110\fscy110)"
-                    r"\t(1500,2000,\fscx100\fscy100)"
-                    r"}"
+                    + entry
+                    + r"\t(900,1500,\fscx110\fscy110)"
+                    + r"\t(1500,2000,\fscx100\fscy100)"
+                    + r"}"
                 )
                 dialogues.append(
                     f"Dialogue: 2,{_ass_time(start_t)},{_ass_time(end_t)},Emoji,,0,0,0,,"
@@ -300,6 +339,27 @@ def generate_ass(
             text = entrance + "".join(parts)
             dialogues.append(
                 f"Dialogue: 0,{_ass_time(dlg_start)},{_ass_time(dlg_end)},Default,,0,0,0,,{text}"
+            )
+
+    # End-card CTA — last ~1.0 s of the clip. Pop in from below, settle, fade out.
+    if config.END_CARD_TEXT and clip_duration and clip_duration > 4.0:
+        cta = config.END_CARD_TEXT.strip()
+        if cta:
+            cta_dur = 1.2  # display this long
+            cta_start = max(0.0, clip_duration - cta_dur)
+            cta_end = clip_duration
+            # Pop-in: scale 60%->110%->100% over 350ms, then idle
+            cta_anim = (
+                r"{\fad(180,250)"
+                r"\fscx60\fscy60"
+                r"\t(0,200,\fscx112\fscy112)"
+                r"\t(200,350,\fscx100\fscy100)"
+                r"}"
+            )
+            cta_text = _escape_ass_text(cta)
+            dialogues.append(
+                f"Dialogue: 1,{_ass_time(cta_start)},{_ass_time(cta_end)},EndCard,,0,0,0,,"
+                + cta_anim + cta_text
             )
 
     out_path.write_text(ASS_HEADER + "\n".join(dialogues) + "\n", encoding="utf-8")
