@@ -284,14 +284,10 @@ def generate_ass(
                 if emitted >= 10:
                     break
 
-    # Captions: per-word pop-in build-up. Auto-speech captions only run
-    # during the hook period (0 → HOOK_DURATION). After the hook fades out,
-    # no captions — keeps the lower-middle hook the sole text element.
-    cap_cutoff = HOOK_DURATION + CAPTION_GRACE
-    visible = [
-        w for w in words
-        if w["start"] < cap_cutoff and not _is_filler(w["word"])
-    ]
+    # Captions: per-word pop-in build-up. Auto-speech captions run the WHOLE
+    # clip — including during the hook (0–2.5s). Hook owns the lower-mid
+    # frame, captions sit at the top, both visible together for the intro.
+    visible = [w for w in words if not _is_filler(w["word"])]
 
     # Per-turn color palette.
     TURN_COLORS = [
