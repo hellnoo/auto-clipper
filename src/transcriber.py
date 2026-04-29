@@ -85,6 +85,113 @@ def _cache_path(audio_path: str) -> Path:
     return p.with_suffix(p.suffix + f".transcript.{config.WHISPER_MODEL}.json")
 
 
+def _ffprobe_duration(path: str) -> float:
+    """Return media duration in seconds via ffprobe, 0.0 on any failure."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(r.stdout.strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def _split_audio_to_chunks(audio_path: str, chunk_sec: float = 600.0) -> list[tuple[Path, float]]:
+    """Split source media into 16 kHz mono PCM wav chunks via ffmpeg.
+    Returns list of (chunk_path, time_offset_in_seconds)."""
+    import subprocess
+    import tempfile
+    src = Path(audio_path)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ac_chunks_"))
+    duration = _ffprobe_duration(audio_path)
+    chunks: list[tuple[Path, float]] = []
+    n_chunks = int(duration // chunk_sec) + (1 if duration % chunk_sec > 0 else 0)
+    for i in range(n_chunks):
+        offset = i * chunk_sec
+        out = tmp_dir / f"chunk_{i:03d}.wav"
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-ss", f"{offset:.3f}",
+             "-i", str(src),
+             "-t", f"{chunk_sec:.3f}",
+             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+             str(out)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            logger.warning(f"chunk {i} ffmpeg failed: {proc.stderr[-200:]}")
+            continue
+        chunks.append((out, offset))
+    return chunks
+
+
+def _transcribe_chunked(model, audio_path: str, total_duration: float, cache: Path) -> dict:
+    """Transcribe a long audio by splitting into 10-min chunks, then stitching
+    word/segment timestamps back together with offsets."""
+    import shutil
+    chunks = _split_audio_to_chunks(audio_path, chunk_sec=600.0)
+    if not chunks:
+        raise RuntimeError("audio splitting produced no chunks")
+
+    all_segments: list[dict] = []
+    all_words: list[dict] = []
+    detected_lang: str | None = None
+    seg_offset_idx = 0
+    chunk_dir = chunks[0][0].parent
+
+    try:
+        for i, (chunk_path, offset) in enumerate(chunks, 1):
+            logger.info(f"  chunk {i}/{len(chunks)} (offset {offset:.0f}s)")
+            segs_iter, info = model.transcribe(
+                str(chunk_path),
+                word_timestamps=True,
+                vad_filter=True,
+                beam_size=1,
+                chunk_length=30,
+            )
+            if detected_lang is None:
+                detected_lang = info.language
+            for seg in segs_iter:
+                seg_words = []
+                for w in (seg.words or []):
+                    wd = {
+                        "start": float(w.start) + offset,
+                        "end": float(w.end) + offset,
+                        "word": w.word.strip(),
+                        "seg": seg_offset_idx,
+                    }
+                    seg_words.append(wd)
+                    all_words.append(wd)
+                all_segments.append({
+                    "start": float(seg.start) + offset,
+                    "end": float(seg.end) + offset,
+                    "text": seg.text.strip(),
+                    "words": seg_words,
+                    "seg": seg_offset_idx,
+                })
+                seg_offset_idx += 1
+    finally:
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+
+    logger.success(f"Transcribed (chunked): lang={detected_lang}, {len(all_segments)} segments, {len(all_words)} words")
+    result = {
+        "language": detected_lang or "en",
+        "duration": total_duration,
+        "segments": all_segments,
+        "words": all_words,
+    }
+    result = _maybe_apply_diarization(audio_path, result)
+    try:
+        cache.write_text(json.dumps(result), encoding="utf-8")
+        logger.info(f"cached transcript -> {cache.name}")
+    except Exception as e:
+        logger.warning(f"cache write failed: {e}")
+    return result
+
+
 def _maybe_apply_diarization(
     audio_path: str, data: dict, expected_speakers: int | None = None
 ) -> dict:
@@ -134,11 +241,18 @@ def transcribe(audio_path: str, expected_speakers: int | None = None) -> dict:
 
     model = get_model()
     logger.info(f"Transcribing {Path(audio_path).name}")
-    # chunk_length=30 forces the feature extractor to process audio in 30 s
-    # chunks instead of computing STFT over the entire file in one shot.
-    # Without this, a 50+ minute clip allocates ~500 MB complex64 arrays and
-    # fails on machines under memory pressure with:
-    #   numpy._core._exceptions._ArrayMemoryError: Unable to allocate 526 MiB
+
+    # Pre-chunk long audio. faster-whisper's chunk_length param chunks model
+    # inference but its feature extractor still runs the STFT on the FULL
+    # audio array — for a 60-min mp4 that allocates ~1 GB float64 and OOMs
+    # on memory-constrained systems. Solution: split with ffmpeg into 10-min
+    # wav chunks, transcribe each, then merge timestamps.
+    duration_s = _ffprobe_duration(audio_path)
+    LONG_AUDIO_THRESHOLD = 20 * 60  # 20 minutes
+    if duration_s > LONG_AUDIO_THRESHOLD:
+        logger.info(f"long audio ({duration_s/60:.1f} min) — splitting into chunks")
+        return _transcribe_chunked(model, audio_path, duration_s, cache)
+
     segments_iter, info = model.transcribe(
         audio_path,
         word_timestamps=True,
