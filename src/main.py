@@ -83,11 +83,16 @@ def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
     """Run the analyze + render half of the pipeline. Reused by regenerate."""
     clips = analyzer.analyze(transcript)
     video_id = db.upsert_video(url, status="rendering")
+    # Pull video-level overrides so they apply uniformly to every clip.
+    video_row = db.get_video(video_id) or {}
+    watermark_override = video_row.get("watermark")
     source_stem = Path(source_path).stem
     segments = transcript.get("segments", [])
     for i, clip in enumerate(clips):
         out = config.FINAL_DIR / f"{source_stem}_clip{i+1}.mp4"
         clip = _snap_clip(clip, transcript["words"], segments)
+        if watermark_override is not None:
+            clip = {**clip, "watermark": watermark_override}
         clip_id = db.insert_clip(video_id, i + 1, {**clip, "status": "rendering"})
         try:
             editor.render_clip(source_path, clip, transcript["words"], out)
@@ -101,11 +106,17 @@ def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
     return len(clips)
 
 
-def process_url(url: str, expected_speakers: int | None = None) -> None:
+def process_url(
+    url: str,
+    expected_speakers: int | None = None,
+    watermark: str | None = None,
+) -> None:
     db.init()
-    fields = {"status": "downloading"}
+    fields: dict = {"status": "downloading"}
     if expected_speakers is not None:
         fields["expected_speakers"] = int(expected_speakers)
+    if watermark is not None:
+        fields["watermark"] = watermark
     vid = db.upsert_video(url, **fields)
     try:
         info = downloader.download(url)
@@ -122,7 +133,11 @@ def process_url(url: str, expected_speakers: int | None = None) -> None:
         raise
 
 
-def regenerate_video(video_id: int, expected_speakers: int | None = None) -> None:
+def regenerate_video(
+    video_id: int,
+    expected_speakers: int | None = None,
+    watermark: str | None = None,
+) -> None:
     """Re-run analyze + render on an existing video using cached source + transcript."""
     db.init()
     v = db.get_video(video_id)
@@ -132,9 +147,14 @@ def regenerate_video(video_id: int, expected_speakers: int | None = None) -> Non
     if not source_path or not Path(source_path).exists():
         raise FileNotFoundError(f"source mp4 missing for video {video_id}: {source_path}")
 
-    # Persist new speaker hint when given
+    # Persist new speaker / watermark overrides when given
+    persist: dict = {}
     if expected_speakers is not None:
-        db.upsert_video(v["url"], expected_speakers=int(expected_speakers))
+        persist["expected_speakers"] = int(expected_speakers)
+    if watermark is not None:
+        persist["watermark"] = watermark
+    if persist:
+        db.upsert_video(v["url"], **persist)
     effective_speakers = (
         expected_speakers if expected_speakers is not None
         else int(v.get("expected_speakers") or 0) or None

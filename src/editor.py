@@ -25,7 +25,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,Montserrat,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,2,8,100,100,140,1
 Style: Hook,Impact,88,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,2,50,50,420,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
-Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
+Style: Watermark,Inter,38,&H40FFFFFF,&H000000FF,&H80000000,&H00000000,1,0,0,0,100,100,0,0,1,3,1,9,50,50,40,1
 Style: EndCard,Impact,68,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,2,100,100,360,1
 
 [Events]
@@ -89,13 +89,16 @@ def generate_ass(
     hook: str | None = None,
     emojis: list[dict] | None = None,
     clip_duration: float | None = None,
+    watermark: str | None = None,
 ) -> None:
     dialogues: list[str] = []
 
     # Watermark first (lowest layer) so it sits behind everything else.
-    if config.WATERMARK_TEXT:
-        wm_text = _escape_ass_text(config.WATERMARK_TEXT.strip())
-        # Span the whole clip; ASS subs after video end are ignored.
+    # Per-call watermark beats the global config default; pass empty string
+    # explicitly to disable.
+    wm = watermark if watermark is not None else config.WATERMARK_TEXT
+    if wm and wm.strip():
+        wm_text = _escape_ass_text(wm.strip())
         wm_end = clip_duration if clip_duration else 9999.0
         # Slow fade in to avoid distracting from the hook moment.
         dialogues.append(
@@ -557,6 +560,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         hook=clip.get("hook"),
         emojis=clip.get("emojis"),
         clip_duration=out_dur,
+        watermark=clip.get("watermark"),
     )
 
     cmd = ["ffmpeg", "-y"]

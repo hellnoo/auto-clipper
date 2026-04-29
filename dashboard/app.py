@@ -55,17 +55,23 @@ def _worker() -> None:
     setup_logging()
     while True:
         job = job_queue.get()
-        kind, payload, speakers = job[0], job[1], (job[2] if len(job) > 2 else None)
+        # job tuple: (kind, payload, speakers, watermark)
+        kind = job[0]
+        payload = job[1]
+        speakers = job[2] if len(job) > 2 else None
+        watermark = job[3] if len(job) > 3 else None
         label = f"regen vid={payload}" if kind == "regen" else str(payload)
         if speakers:
-            label += f" ({speakers} speakers)"
+            label += f" spk={speakers}"
+        if watermark:
+            label += f" wm={watermark}"
         _current["label"] = label
         try:
             logger.info(f"[worker] start {label}")
             if kind == "url":
-                process_url(payload, expected_speakers=speakers)  # type: ignore[arg-type]
+                process_url(payload, expected_speakers=speakers, watermark=watermark)  # type: ignore[arg-type]
             elif kind == "regen":
-                regenerate_video(int(payload), expected_speakers=speakers)
+                regenerate_video(int(payload), expected_speakers=speakers, watermark=watermark)
             else:
                 logger.warning(f"[worker] unknown job kind: {kind}")
             logger.success(f"[worker] done {label}")
@@ -218,6 +224,9 @@ PAGE = """<!doctype html>
  </div>
  <form class="submit" action="/submit" method="post">
   <input type="url" name="url" required placeholder="paste a YouTube / TikTok URL…" autocomplete="off">
+  <input type="text" name="watermark" maxlength="32" placeholder="@yourname"
+         title="Watermark on every clip (your @username). Leave blank for no watermark."
+         style="width:140px;padding:12px 14px;background:transparent;border:0;border-left:1px solid var(--border);color:var(--text);font-size:13px;font-family:inherit;outline:none">
   <select name="speakers" title="Speaker count for diarization (color per speaker)">
    <option value="0">auto speakers</option>
    <option value="1">1 speaker</option>
@@ -370,14 +379,21 @@ def _render_video(v: dict) -> str:
 
     can_regen = bool(v.get("path")) and Path(v["path"]).exists() if v.get("path") else False
     current_spk = int(v.get("expected_speakers") or 0)
+    current_wm = v.get("watermark") or ""
     if can_regen:
         opts = []
         for n in range(0, 7):
             label = "auto" if n == 0 else f"{n} speaker{'s' if n>1 else ''}"
             sel = " selected" if n == current_spk else ""
             opts.append(f'<option value="{n}"{sel}>{label}</option>')
+        wm_attr = _esc(current_wm)
         regen_btn = (
             f'<form class="regen" method="post" action="/regenerate/{v["id"]}">'
+            f'<input type="text" name="watermark" value="{wm_attr}" maxlength="32" '
+            f'placeholder="@yourname" title="Watermark @username (blank = none)" '
+            f'style="padding:5px 8px;background:var(--surface2);color:var(--text);'
+            f'border:1px solid var(--border);border-radius:6px;font-size:11px;width:110px;'
+            f'font-family:inherit;outline:none">'
             f'<select name="speakers" title="Speaker count for diarization">{"".join(opts)}</select>'
             f'<button type="submit" class="btn-regen" '
             f'title="Re-run analyze + render using cached source/transcript">↻ regenerate</button>'
@@ -435,26 +451,41 @@ def index() -> str:
 
 
 @app.post("/submit")
-def submit(url: str = Form(...), speakers: int = Form(0)) -> RedirectResponse:
+def submit(
+    url: str = Form(...),
+    speakers: int = Form(0),
+    watermark: str = Form(""),
+) -> RedirectResponse:
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL must start with http:// or https://")
     spk = max(0, min(int(speakers or 0), 10)) or None
-    job_queue.put(("url", url, spk))
-    logger.info(f"queued: {url} speakers={spk or 'auto'} (qsize={job_queue.qsize()})")
+    wm = watermark.strip()[:32] if watermark else None  # cap at 32 chars
+    job_queue.put(("url", url, spk, wm))
+    logger.info(f"queued: {url} speakers={spk or 'auto'} watermark={wm!r} (qsize={job_queue.qsize()})")
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/regenerate/{video_id}")
-def regenerate(video_id: int, speakers: int = Form(0)) -> RedirectResponse:
+def regenerate(
+    video_id: int,
+    speakers: int = Form(0),
+    watermark: str = Form(""),
+) -> RedirectResponse:
     v = db.get_video(video_id)
     if not v:
         raise HTTPException(404, "video not found")
     if not v.get("path") or not Path(v["path"]).exists():
         raise HTTPException(409, "source mp4 missing on disk; submit the URL again")
     spk = max(0, min(int(speakers or 0), 10)) or None
-    job_queue.put(("regen", video_id, spk))
-    logger.info(f"queued regen: video_id={video_id} speakers={spk or 'auto'} (qsize={job_queue.qsize()})")
+    # Empty form value -> keep existing watermark (don't overwrite to blank).
+    # Use sentinel: dashboard sends '__keep__' when user didn't change the field.
+    if watermark == "__keep__":
+        wm = None
+    else:
+        wm = watermark.strip()[:32]
+    job_queue.put(("regen", video_id, spk, wm))
+    logger.info(f"queued regen: video_id={video_id} speakers={spk or 'auto'} watermark={wm!r} (qsize={job_queue.qsize()})")
     return RedirectResponse("/", status_code=303)
 
 
