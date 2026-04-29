@@ -55,18 +55,23 @@ def _worker() -> None:
     setup_logging()
     while True:
         job = job_queue.get()
-        # job tuple: (kind, payload, speakers, watermark)
         kind = job[0]
-        payload = job[1]
-        speakers = job[2] if len(job) > 2 else None
-        watermark = job[3] if len(job) > 3 else None
-        label = f"regen vid={payload}" if kind == "regen" else str(payload)
-        if speakers:
-            label += f" spk={speakers}"
-        if watermark:
-            label += f" wm={watermark}"
-        _current["label"] = label
         try:
+            if kind == "yt_upload":
+                _, clip_id, upload_id, privacy = job
+                _do_yt_upload(int(clip_id), int(upload_id), privacy)
+                continue
+
+            # Default: video-processing jobs (kind in {"url","regen"})
+            payload = job[1]
+            speakers = job[2] if len(job) > 2 else None
+            watermark = job[3] if len(job) > 3 else None
+            label = f"regen vid={payload}" if kind == "regen" else str(payload)
+            if speakers:
+                label += f" spk={speakers}"
+            if watermark:
+                label += f" wm={watermark}"
+            _current["label"] = label
             logger.info(f"[worker] start {label}")
             if kind == "url":
                 process_url(payload, expected_speakers=speakers, watermark=watermark)  # type: ignore[arg-type]
@@ -76,10 +81,47 @@ def _worker() -> None:
                 logger.warning(f"[worker] unknown job kind: {kind}")
             logger.success(f"[worker] done {label}")
         except Exception:
-            logger.exception(f"[worker] failed {label}")
+            logger.exception(f"[worker] failed kind={kind}")
         finally:
             _current["label"] = None
             job_queue.task_done()
+
+
+def _do_yt_upload(clip_id: int, upload_id: int, privacy: str) -> None:
+    """Run a YouTube upload job. Updates clip_uploads row throughout."""
+    from src.uploaders import youtube as yt
+    label = f"yt-upload clip={clip_id}"
+    _current["label"] = label
+    logger.info(f"[worker] start {label} privacy={privacy}")
+    try:
+        clips = [c for c in db.list_clips() if c["id"] == clip_id]
+        if not clips:
+            raise RuntimeError(f"clip {clip_id} not found")
+        clip = clips[0]
+        path = clip.get("path")
+        if not path or not Path(path).exists():
+            raise RuntimeError(f"clip file missing: {path}")
+        title = (clip.get("hook") or f"Clip {clip['idx']}")[:100]
+        caption = clip.get("caption") or ""
+        hashtags_csv = clip.get("hashtags") or ""
+        tags = [t.strip() for t in hashtags_csv.split(",") if t.strip()]
+        # Description = caption + hashtag hash-prefixed
+        desc_lines = [caption, "", " ".join(f"#{t}" for t in tags)]
+        description = "\n".join(l for l in desc_lines if l).strip()
+
+        db.set_upload_status(upload_id, "uploading")
+        result = yt.upload(
+            path, title=title, description=description, tags=tags,
+            privacy_status=privacy,
+        )
+        db.set_upload_status(
+            upload_id, "done",
+            remote_id=result["id"], remote_url=result["url"],
+        )
+        logger.success(f"[worker] done {label} -> {result['url']}")
+    except Exception as e:
+        logger.exception(f"[worker] yt-upload failed clip={clip_id}")
+        db.set_upload_status(upload_id, "error", error=str(e)[:500])
 
 
 @asynccontextmanager
@@ -146,6 +188,20 @@ PAGE = """<!doctype html>
  form.regen{{display:inline-flex;align-items:center;gap:6px}}
  form.regen select{{padding:5px 8px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:6px;font-size:11px;font-family:inherit;cursor:pointer}}
  form.regen select option{{background:var(--surface);color:var(--text)}}
+
+ /* Upload chips & buttons */
+ .uploads{{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid rgba(38,38,47,0.6)}}
+ .upload-chip{{font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(125,125,140,0.18);color:var(--muted);font-family:'JetBrains Mono',monospace;text-decoration:none;display:inline-flex;align-items:center;gap:4px}}
+ .upload-chip.done{{background:rgba(239,68,68,0.0);color:#ff6b6b;border:1px solid rgba(255,107,107,0.4)}}
+ .upload-chip.done:hover{{background:rgba(255,107,107,0.15)}}
+ .upload-chip.running{{background:rgba(251,146,60,0.16);color:var(--orange)}}
+ .upload-chip.error{{background:rgba(239,68,68,0.12);color:var(--red);cursor:help}}
+ .upload-form{{display:inline-flex;gap:4px;align-items:center;margin-left:auto}}
+ .upload-form select{{padding:3px 6px;background:var(--surface);color:var(--muted);border:1px solid var(--border);border-radius:5px;font-size:10px;font-family:inherit}}
+ .btn-upload{{padding:4px 10px;background:rgba(255,107,107,0.10);color:#ff6b6b;border:1px solid rgba(255,107,107,0.35);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit}}
+ .btn-upload:hover{{background:rgba(255,107,107,0.22);border-color:rgba(255,107,107,0.6)}}
+ .btn-connect{{padding:8px 14px;background:rgba(255,107,107,0.10);color:#ff6b6b;border:1px solid rgba(255,107,107,0.35);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px}}
+ .btn-connect.connected{{background:rgba(34,197,94,0.10);color:var(--green);border-color:rgba(34,197,94,0.35)}}
 
  /* QUEUE STRIP */
  .queue{{padding:14px 32px;font-size:13px;color:var(--muted);font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(38,38,47,0.5)}}
@@ -238,6 +294,8 @@ PAGE = """<!doctype html>
   </select>
   <button type="submit">Generate</button>
  </form>
+ <button id="yt-connect-btn" class="btn-connect" title="Connect YouTube account for one-click upload"
+         onclick="ytConnect()">↑ YouTube</button>
 </header>
 <div class="queue"><span class="dot"></span><span>{queue_info}</span></div>
 <main>{body}</main>
@@ -272,11 +330,48 @@ PAGE = """<!doctype html>
   }}
 
   setInterval(tick, 15000);
-  // Also re-check when a video pauses/ends so we don't make the user wait
-  // up to 15s extra after they finish watching.
   document.addEventListener('pause', () => setTimeout(tick, 500), true);
   document.addEventListener('ended', () => setTimeout(tick, 500), true);
 }})();
+
+// --- YouTube connect button ---
+async function refreshYtBtn() {{
+  try {{
+    const r = await fetch('/uploaders/status');
+    const data = await r.json();
+    const btn = document.getElementById('yt-connect-btn');
+    if (!btn) return;
+    if (data.youtube && data.youtube.connected) {{
+      btn.classList.add('connected');
+      btn.textContent = '✓ YouTube connected';
+      btn.title = 'YouTube account connected; click to reconnect';
+    }} else {{
+      btn.classList.remove('connected');
+      btn.textContent = '↑ Connect YouTube';
+    }}
+  }} catch (e) {{}}
+}}
+async function ytConnect() {{
+  const btn = document.getElementById('yt-connect-btn');
+  btn.disabled = true;
+  btn.textContent = 'opening browser…';
+  try {{
+    const r = await fetch('/uploaders/youtube/connect', {{ method: 'POST' }});
+    if (!r.ok) {{
+      const err = await r.text();
+      alert('Connect failed:\\n\\n' + err);
+    }} else {{
+      const data = await r.json();
+      alert('Connected: ' + (data.channel || '(channel)'));
+    }}
+  }} catch (e) {{
+    alert('Connect failed: ' + e);
+  }} finally {{
+    btn.disabled = false;
+    refreshYtBtn();
+  }}
+}}
+refreshYtBtn();
 </script>
 </body></html>
 """
@@ -358,6 +453,49 @@ def _render_clip(c: dict) -> str:
         f'</div>'
     )
 
+    # Upload area: shows existing uploads + YouTube upload button
+    upload_html = ""
+    if url:  # only if file actually exists
+        ups = db.list_uploads_for_clip(c["id"])
+        # Existing upload chips
+        chips = []
+        for u in ups[:3]:
+            plat = u["platform"]
+            ust = u["status"] or "pending"
+            if ust == "done" and u["remote_url"]:
+                chips.append(
+                    f'<a class="upload-chip done" href="{_esc(u["remote_url"])}" target="_blank" rel="noopener" '
+                    f'title="{_esc(plat)}: {_esc(ust)}">{_esc(plat)} ✓</a>'
+                )
+            elif ust == "uploading":
+                chips.append(f'<span class="upload-chip running">{_esc(plat)} ↑</span>')
+            elif ust.startswith("error"):
+                chips.append(
+                    f'<span class="upload-chip error" title="{_esc(u["error"] or ust)}">{_esc(plat)} ✗</span>'
+                )
+            else:
+                chips.append(f'<span class="upload-chip">{_esc(plat)} {_esc(ust)}</span>')
+        chips_html = "".join(chips)
+        # Show upload button only if there's no successful YT upload yet
+        has_yt_done = any(u["platform"] == "youtube" and u["status"] == "done" for u in ups)
+        yt_btn = ""
+        if not has_yt_done:
+            yt_btn = (
+                f'<form method="post" action="/uploaders/youtube/upload/{c["id"]}" class="upload-form">'
+                f'<select name="privacy" title="visibility">'
+                f'<option value="private">private</option>'
+                f'<option value="unlisted">unlisted</option>'
+                f'<option value="public">public</option>'
+                f'</select>'
+                f'<button type="submit" class="btn-upload" title="Upload to YouTube">↑ YT</button>'
+                f'</form>'
+            )
+        upload_html = (
+            f'<div class="uploads">'
+            f'{chips_html}{yt_btn}'
+            f'</div>'
+        )
+
     return (
         f'<div class="clip">{video_tag}'
         f'<div class="hook">{_esc(c["hook"])}</div>'
@@ -366,6 +504,7 @@ def _render_clip(c: dict) -> str:
         f'{emoji_html}'
         f'{score_html}'
         f'<div class="clip-foot">{download_btn}<span class="status {st_class}">{_esc(st)}</span>{size_html}</div>'
+        f'{upload_html}'
         f'</div>'
     )
 
@@ -506,3 +645,48 @@ def api_clips(video_id: int) -> dict:
     if not v:
         raise HTTPException(404)
     return {"video": v, "clips": db.list_clips(video_id)}
+
+
+# --- YouTube uploader endpoints -------------------------------------------------
+
+@app.get("/uploaders/status")
+def uploader_status() -> dict:
+    """Returns connection state per platform so the UI can show 'connected'/'connect' buttons."""
+    from src.uploaders import youtube as yt
+    return {"youtube": {"connected": yt.is_connected()}}
+
+
+@app.post("/uploaders/youtube/connect")
+def yt_connect() -> dict:
+    """Trigger the OAuth flow. Opens a browser for consent. Blocks until user
+    completes the flow (typical 10-30 s)."""
+    from src.uploaders import youtube as yt
+    try:
+        name = yt.connect_account()
+        return {"ok": True, "channel": name}
+    except yt._ConfigError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("youtube connect failed")
+        raise HTTPException(500, f"connect failed: {e}")
+
+
+@app.post("/uploaders/youtube/upload/{clip_id}")
+def yt_upload(
+    clip_id: int,
+    privacy: str = Form("private"),
+) -> RedirectResponse:
+    """Queue a YouTube upload for a clip. The actual upload runs on the worker
+    thread so the dashboard request returns instantly."""
+    if privacy not in ("private", "unlisted", "public"):
+        raise HTTPException(400, "invalid privacy")
+    clips = [c for c in db.list_clips() if c["id"] == clip_id]
+    if not clips:
+        raise HTTPException(404, "clip not found")
+    clip = clips[0]
+    if not clip.get("path") or not Path(clip["path"]).exists():
+        raise HTTPException(409, "clip file missing on disk")
+    upload_id = db.insert_upload(clip_id, "youtube")
+    job_queue.put(("yt_upload", clip_id, upload_id, privacy))
+    logger.info(f"queued YouTube upload: clip_id={clip_id} upload_id={upload_id} privacy={privacy}")
+    return RedirectResponse("/", status_code=303)

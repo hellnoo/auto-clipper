@@ -48,6 +48,51 @@ _MIGRATIONS = [
 ]
 
 
+_UPLOAD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS clip_uploads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,                 -- 'youtube' | 'instagram' | 'tiktok'
+    status TEXT DEFAULT 'pending',          -- pending|uploading|done|error
+    remote_id TEXT,
+    remote_url TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(clip_id) REFERENCES clips(id)
+);
+CREATE INDEX IF NOT EXISTS idx_uploads_clip ON clip_uploads(clip_id);
+"""
+
+
+def insert_upload(clip_id: int, platform: str) -> int:
+    with conn() as c:
+        cur = c.execute(
+            "INSERT INTO clip_uploads (clip_id, platform, status) VALUES (?, ?, 'pending')",
+            (clip_id, platform),
+        )
+        return cur.lastrowid
+
+
+def set_upload_status(upload_id: int, status: str, *, remote_id: str | None = None,
+                      remote_url: str | None = None, error: str | None = None) -> None:
+    with conn() as c:
+        c.execute(
+            "UPDATE clip_uploads SET status=?, remote_id=?, remote_url=?, error=?, "
+            "updated_at=? WHERE id=?",
+            (status, remote_id, remote_url, error, datetime.utcnow().isoformat(), upload_id),
+        )
+
+
+def list_uploads_for_clip(clip_id: int) -> list[dict]:
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM clip_uploads WHERE clip_id=? ORDER BY id DESC",
+            (clip_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def _apply_migrations(c: sqlite3.Connection) -> None:
     for table, col, sql in _MIGRATIONS:
         cols = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -69,6 +114,7 @@ def conn():
 def init() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
+        c.executescript(_UPLOAD_SCHEMA)
         _apply_migrations(c)
 
 
