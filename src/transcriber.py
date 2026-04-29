@@ -134,11 +134,17 @@ def transcribe(audio_path: str, expected_speakers: int | None = None) -> dict:
 
     model = get_model()
     logger.info(f"Transcribing {Path(audio_path).name}")
+    # chunk_length=30 forces the feature extractor to process audio in 30 s
+    # chunks instead of computing STFT over the entire file in one shot.
+    # Without this, a 50+ minute clip allocates ~500 MB complex64 arrays and
+    # fails on machines under memory pressure with:
+    #   numpy._core._exceptions._ArrayMemoryError: Unable to allocate 526 MiB
     segments_iter, info = model.transcribe(
         audio_path,
         word_timestamps=True,
         vad_filter=True,
         beam_size=1,
+        chunk_length=30,
     )
     segments: list[dict] = []
     words_all: list[dict] = []
