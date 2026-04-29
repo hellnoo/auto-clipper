@@ -22,8 +22,8 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,100,100,600,1
-Style: Hook,Impact,88,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,8,50,50,160,1
+Style: Default,Montserrat,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,2,8,100,100,140,1
+Style: Hook,Impact,88,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,2,50,50,420,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
 Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
 Style: EndCard,Impact,68,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,2,100,100,360,1
@@ -142,9 +142,11 @@ def generate_ass(
                 out_lines.append(" ".join(buf))
             return r"\N".join(_escape_ass_text(l) for l in out_lines)
 
+        # ALL CAPS for hook — viral comedy-shorts standard.
+        cleaned_caps = cleaned.upper()
         if n < 16:
             hook_size_override = ""
-            hook_text = _escape_ass_text(cleaned)
+            hook_text = _escape_ass_text(cleaned_caps)
         else:
             if n <= 28:
                 fs, lines = 88, 2
@@ -155,32 +157,36 @@ def generate_ass(
             else:
                 fs, lines = 70, 3
             hook_size_override = rf"\fs{fs}"
-            hook_text = _split_n_lines(cleaned, lines)
+            # Multi-color per line: line 1 WHITE, lines 2+ YELLOW (Submagic /
+            # comedycloopsid style). Inject \1c overrides between line breaks.
+            split_text = _split_n_lines(cleaned_caps, lines)
+            line_parts = split_text.split(r"\N")
+            recolored = []
+            for li, lt in enumerate(line_parts):
+                color = "&H00FFFFFF&" if li == 0 else "&H0000F0FF&"
+                recolored.append(rf"{{\1c{color}}}" + lt)
+            hook_text = r"\N".join(recolored)
         # Layered animation:
         #   - pop in scale 30% -> 115% -> 100%
         #   - fade in / fade out
         #   - color sweep: white -> cyan -> magenta over the hook duration
         # Color hex is &HBBGGRR. Cyan ≈ &H00F0FF (BGR), Magenta ≈ &HFF66E0.
-        # Hook position presets — alignment 8 (top-center) means style MarginV
-        # measures from the top. The hook centers horizontally at PlayResX/2 = 540,
-        # and starts at y=200 (style MarginV). We \move it up by ~80px in the last
-        # 400ms so it exits with a slide rather than just fading.
+        # Hook position: lower-middle of the 9:16 frame (~y=1300 in 1920 height).
+        # \an5 = anchor at text center, \pos places that center at the
+        # specified point — gives consistent layout regardless of line count.
         hook_x = 540
-        hook_y_start = 200
-        hook_y_end = hook_y_start - 80
+        hook_y = 1300
         hook_t_exit_start = int((HOOK_DURATION - 0.4) * 1000)
         hook_t_exit_end = int(HOOK_DURATION * 1000)
+        # Pop-in scale + slide up exit. Per-line colors handled in hook_text.
         anim = (
             r"{\fad(140,350)"
             + hook_size_override +
-            f"\\an8\\move({hook_x},{hook_y_start},{hook_x},{hook_y_end},"
+            f"\\an5\\move({hook_x},{hook_y},{hook_x},{hook_y - 60},"
             f"{hook_t_exit_start},{hook_t_exit_end})"
             r"\fscx30\fscy30"
             r"\t(0,180,\fscx115\fscy115)"
             r"\t(180,320,\fscx100\fscy100)"
-            r"\1c&H00FFFFFF&"
-            r"\t(200,1100,\1c&H00F0FF00&)"
-            r"\t(1100,2300,\1c&H00FF66E0&)"
             r"}"
         )
         dialogues.append(
@@ -275,14 +281,11 @@ def generate_ass(
                 if emitted >= 10:
                     break
 
-    # Captions: per-word pop-in build-up, only after the hook period.
-    # Each phrase shows N words on screen; as each word starts, it pops in
-    # while previously-shown words stay visible (dimmed). Submagic style.
-    cap_start = HOOK_DURATION + CAPTION_GRACE
-    visible = [
-        w for w in words
-        if w["start"] >= cap_start and not _is_filler(w["word"])
-    ]
+    # Captions: per-word pop-in build-up. Auto-speech captions run during
+    # the WHOLE clip — including during the hook period — so the viewer can
+    # follow the actual speech while the hook overlay tags the moment.
+    # (Reference: comedycloopsid / Submagic-style live captions + static hook.)
+    visible = [w for w in words if not _is_filler(w["word"])]
 
     # Per-turn color palette.
     TURN_COLORS = [
