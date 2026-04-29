@@ -23,7 +23,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,Montserrat,84,&H0000F0FF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,3,2,100,100,600,1
-Style: Hook,Impact,88,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,8,80,80,180,1
+Style: Hook,Impact,88,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,8,50,50,160,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
 Style: Watermark,Inter,30,&H66FFFFFF,&H000000FF,&H66000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,1,40,40,40,1
 Style: EndCard,Impact,68,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,2,100,100,360,1
@@ -104,45 +104,58 @@ def generate_ass(
         )
 
     if hook:
-        # Auto-fit hook into the 9:16 frame. Rules tuned for Impact bold with
-        # MarginL/R=80 (920 px effective width).
-        #   < 16 chars   -> 1 line at base 88pt (BIG)
+        # Auto-fit hook so it DOMINATES the frame. Rules: short hooks stay
+        # huge (1-2 lines at 88pt). Long hooks split into 3 lines so each
+        # line is short enough to use a still-large font instead of shrinking
+        # text into oblivion.
+        #   < 16 chars   -> 1 line at 88pt
         #   16-28 chars  -> 2 lines at 88pt
-        #   29-44 chars  -> 2 lines at 76pt
-        #   45-60 chars  -> 2 lines at 64pt
-        #   > 60 chars   -> 2 lines at 56pt + truncate at 70
+        #   29-44 chars  -> 2 lines at 80pt
+        #   45-66 chars  -> 3 lines at 80pt   (was 64pt / 2 lines)
+        #   > 66 chars   -> 3 lines at 70pt + truncate at 80
         cleaned = hook.strip().rstrip(".!?,")
-        if len(cleaned) > 70:
-            cleaned = cleaned[:67].rsplit(" ", 1)[0] + "…"
+        if len(cleaned) > 80:
+            cleaned = cleaned[:77].rsplit(" ", 1)[0] + "…"
         n = len(cleaned)
+
+        def _split_n_lines(text: str, lines: int) -> str:
+            """Split into N near-equal-length lines at word boundaries."""
+            words_split = text.split()
+            if lines <= 1 or len(words_split) <= 1:
+                return _escape_ass_text(text)
+            total = len(text)
+            chunk_target = total / lines
+            out_lines: list[str] = []
+            buf: list[str] = []
+            buf_len = 0
+            for w in words_split:
+                proj = buf_len + len(w) + (1 if buf else 0)
+                if buf and len(out_lines) < lines - 1 and proj > chunk_target:
+                    out_lines.append(" ".join(buf))
+                    buf = [w]
+                    buf_len = len(w)
+                    chunk_target = (total - sum(len(s) + 1 for s in out_lines)) / (lines - len(out_lines))
+                else:
+                    buf.append(w)
+                    buf_len = proj
+            if buf:
+                out_lines.append(" ".join(buf))
+            return r"\N".join(_escape_ass_text(l) for l in out_lines)
+
         if n < 16:
             hook_size_override = ""
             hook_text = _escape_ass_text(cleaned)
         else:
             if n <= 28:
-                fs = 88
+                fs, lines = 88, 2
             elif n <= 44:
-                fs = 76
-            elif n <= 60:
-                fs = 64
+                fs, lines = 80, 2
+            elif n <= 66:
+                fs, lines = 80, 3
             else:
-                fs = 56
+                fs, lines = 70, 3
             hook_size_override = rf"\fs{fs}"
-
-            # Split as close to the middle as possible at a word boundary.
-            words_h = cleaned.split()
-            target = len(cleaned) // 2
-            best_idx, best_diff = 1, len(cleaned)
-            cum = 0
-            for i, w in enumerate(words_h[:-1]):
-                cum += len(w) + 1
-                diff = abs(cum - target)
-                if diff < best_diff:
-                    best_diff = diff
-                    best_idx = i + 1
-            line1 = " ".join(words_h[:best_idx])
-            line2 = " ".join(words_h[best_idx:])
-            hook_text = _escape_ass_text(line1) + r"\N" + _escape_ass_text(line2)
+            hook_text = _split_n_lines(cleaned, lines)
         # Layered animation:
         #   - pop in scale 30% -> 115% -> 100%
         #   - fade in / fade out
