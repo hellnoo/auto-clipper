@@ -41,3 +41,6 @@ output/.models/
 .vscode/
 *.log
 Thumbs.db
+
+# personal profile README draft (move to hellnoo/hellnoo repo)
+HELLNOO_PROFILE_README.md
