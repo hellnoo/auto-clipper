@@ -284,11 +284,14 @@ def generate_ass(
                 if emitted >= 10:
                     break
 
-    # Captions: per-word pop-in build-up. Auto-speech captions run during
-    # the WHOLE clip — including during the hook period — so the viewer can
-    # follow the actual speech while the hook overlay tags the moment.
-    # (Reference: comedycloopsid / Submagic-style live captions + static hook.)
-    visible = [w for w in words if not _is_filler(w["word"])]
+    # Captions: per-word pop-in build-up. Auto-speech captions only run
+    # during the hook period (0 → HOOK_DURATION). After the hook fades out,
+    # no captions — keeps the lower-middle hook the sole text element.
+    cap_cutoff = HOOK_DURATION + CAPTION_GRACE
+    visible = [
+        w for w in words
+        if w["start"] < cap_cutoff and not _is_filler(w["word"])
+    ]
 
     # Per-turn color palette.
     TURN_COLORS = [
