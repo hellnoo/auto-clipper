@@ -4,17 +4,40 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# --- secrets / credentials (NEVER commit) ---
 .env
 config/.env
+config/*.env
+config/youtube_client.json
+config/youtube_token.json
+config/instagram_session.json
+config/tiktok_cookies.json
+config/*_credentials.json
+config/*_token.json
+config/*_secret*
+*cookies.txt
+cookies/
+
+# --- generated content / caches ---
 output/raw/*
 output/clips/*
 output/final/*
+output/.models/
 !output/raw/.gitkeep
 !output/clips/.gitkeep
 !output/final/.gitkeep
+*.transcript.*.json
+*.diarize.json
+
+# --- databases / runtime state ---
 *.db
 *.sqlite
+*.sqlite3
+
+# --- editor / OS junk ---
 .DS_Store
 .idea/
 .vscode/
 *.log
+Thumbs.db
