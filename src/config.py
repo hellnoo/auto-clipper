@@ -19,6 +19,12 @@ OPENROUTER_MODEL = env("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5")
 OPENROUTER_REFERER = env("OPENROUTER_REFERER", "https://github.com/hellnoo/auto-clipper")
 OPENROUTER_TITLE = env("OPENROUTER_TITLE", "auto-clipper")
 
+# Multi-agent quality pipeline. When enabled, after the curator picks clips,
+# a critic agent reviews each one and refines weak hooks / awkward boundaries
+# before render. Adds ~1 LLM call per video (~$0.05 on Sonnet) for noticeably
+# more polished output.
+LLM_CRITIQUE = env("LLM_CRITIQUE", "1") == "1"
+
 WHISPER_MODEL = env("WHISPER_MODEL", "small")
 WHISPER_DEVICE = env("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE = env("WHISPER_COMPUTE", "int8")

@@ -387,12 +387,79 @@ def analyze(transcript: dict) -> list[dict]:
                     f"no valid clips (returned {last_returned_count}, "
                     f"rejected {len(rejected)}: {rejected[:3]})"
                 )
-            logger.success(f"Got {len(clips)} clips from LLM")
+            logger.success(f"Got {len(clips)} clips from curator")
+            # Quality pass: critic agent reviews + refines before render.
+            if config.LLM_CRITIQUE and config.LLM_PROVIDER in ("openrouter", "or"):
+                clips = _critique_pass(provider, transcript, clips, user) or clips
             return clips
         except Exception as e:
             last_err = e
             logger.warning(f"LLM attempt {attempt} failed: {e}")
     raise RuntimeError(f"LLM analysis failed after 3 attempts: {last_err}")
+
+
+CRITIC_SYSTEM = """You are a SENIOR viral-shorts editor reviewing a junior editor's draft clip selections. Your job: catch the issues a viewer would notice, and ship a refined version.
+
+For each draft clip, audit:
+1. **Hook strength** — does it use one of the proven templates (bold claim, question, POV, number, stat shock, mini-reveal, etc.)? Is it ≤ 70 chars? Is it punchy or generic? In the source language?
+2. **Boundary cleanliness** — does start/end land at sentence boundaries (look at transcript text near the timestamps)?
+3. **Self-contained** — would a cold viewer who hasn't seen earlier video understand the moment?
+4. **Score honesty** — is the score inflated? A clip with a meh hook should not be scored 90.
+5. **Time-spread** — clips spread across video, not clustered.
+
+Refinement actions allowed:
+- REWRITE the hook (keep it punchy, source language, ≤ 70 chars)
+- TRIM the caption if too vague
+- ADJUST start/end timestamps by ± a few seconds to land on sentence boundaries
+- DROP a clip that's not viable standalone
+- ADD 1 better candidate from the transcript if you spot one the curator missed
+- LOWER the score if inflated, RAISE if undersold
+
+Keep the same JSON schema. Return refined clips array. Do not change `emojis` field unless you also changed the clip text content. Output ONLY valid JSON, same shape:
+{"clips":[{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>,"emojis":[{"word":"...","emoji":"..."}]}]}"""
+
+
+def _critique_pass(
+    provider: LLMProvider,
+    transcript: dict,
+    draft_clips: list[dict],
+    original_user: str,
+) -> list[dict] | None:
+    """Run the critic agent over the curator's draft. Returns refined clips
+    on success, None on failure (caller falls back to draft)."""
+    try:
+        critic_user = (
+            "DRAFT CLIPS FROM JUNIOR EDITOR:\n"
+            + json.dumps({"clips": draft_clips}, ensure_ascii=False, indent=2)
+            + "\n\nORIGINAL TRANSCRIPT CONTEXT:\n"
+            + original_user
+            + "\n\nReview, refine, and return the polished clips JSON."
+        )
+        logger.info("running critic pass...")
+        raw = provider.complete(CRITIC_SYSTEM, critic_user)
+        data = _extract_json(raw)
+        refined, rejected = _validate_clips(data, transcript["duration"])
+        if not refined:
+            logger.warning(f"critic returned no valid clips ({len(rejected)} rejected); keeping draft")
+            return None
+        # Sanity: refined should not lose more than half the clips
+        if len(refined) < max(1, len(draft_clips) // 2):
+            logger.warning(
+                f"critic dropped too many clips ({len(draft_clips)} -> {len(refined)}); "
+                "merging with draft"
+            )
+            # Merge: keep critic's refined clips + add any draft clips with non-overlapping starts
+            kept = list(refined)
+            kept_starts = {round(c["start"], 1) for c in kept}
+            for c in draft_clips:
+                if not any(abs(c["start"] - k["start"]) < 30 for k in kept):
+                    kept.append(c)
+            refined = kept[: config.CLIP_COUNT_MAX]
+        logger.success(f"critic refined: {len(draft_clips)} draft -> {len(refined)} polished")
+        return refined
+    except Exception as e:
+        logger.warning(f"critic pass failed ({e}); keeping draft")
+        return None
 
 
 if __name__ == "__main__":
