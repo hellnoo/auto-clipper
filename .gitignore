@@ -16,6 +16,7 @@ config/tiktok_cookies.json
 config/*_credentials.json
 config/*_token.json
 config/*_secret*
+config/curator_learnings.json
 *cookies.txt
 cookies/
 

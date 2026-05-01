@@ -338,6 +338,16 @@ def analyze(transcript: dict) -> list[dict]:
         cmin=config.CLIP_COUNT_MIN,
         cmax=config.CLIP_COUNT_MAX,
     )
+    # Append cumulative lessons learnt from prior critic passes — over time
+    # the curator stops repeating mistakes and the critic finds less to fix.
+    try:
+        from . import learnings
+        lessons_md = learnings.lessons_block()
+        if lessons_md:
+            system = system + lessons_md
+            logger.info(f"injected {lessons_md.count(chr(10) + '- ')} past lessons into curator prompt")
+    except Exception as e:
+        logger.debug(f"learnings inject failed: {e}")
     # Start budget — providers with bigger TPM caps (OpenRouter / Claude / GPT-4) can use more.
     token_budget = 24000 if config.LLM_PROVIDER in ("openrouter", "or") else 6500
     user = _build_user_prompt(transcript, target_input_tokens=token_budget)
@@ -406,7 +416,7 @@ def analyze(transcript: dict) -> list[dict]:
     raise RuntimeError(f"LLM analysis failed after 3 attempts: {last_err}")
 
 
-CRITIC_SYSTEM = """You are a SENIOR viral-shorts editor reviewing a junior editor's draft clip selections. Your job: catch the issues a viewer would notice, and ship a refined version.
+CRITIC_SYSTEM = """You are a SENIOR viral-shorts editor reviewing a junior editor's draft clip selections. Your job: catch the issues a viewer would notice, ship a refined version, AND distill what the junior did wrong into 1-3 short lessons so they improve next time.
 
 For each draft clip, audit:
 1. **Hook strength** — does it use one of the proven templates (bold claim, question, POV, number, stat shock, mini-reveal, etc.)? Is it ≤ 70 chars? Is it punchy or generic? In the source language?
@@ -414,6 +424,7 @@ For each draft clip, audit:
 3. **Self-contained** — would a cold viewer who hasn't seen earlier video understand the moment?
 4. **Score honesty** — is the score inflated? A clip with a meh hook should not be scored 90.
 5. **Time-spread** — clips spread across video, not clustered.
+6. **CTA quality** — is the cta specific to the clip's content, or did the junior fall back to generic 'follow for more'?
 
 Refinement actions allowed:
 - REWRITE the hook (keep it punchy, source language, ≤ 70 chars)
@@ -422,9 +433,15 @@ Refinement actions allowed:
 - DROP a clip that's not viable standalone
 - ADD 1 better candidate from the transcript if you spot one the curator missed
 - LOWER the score if inflated, RAISE if undersold
+- REWRITE generic ctas with content-specific ones
 
-Keep the same JSON schema. Return refined clips array. Do not change `emojis` field unless you also changed the clip text content. Output ONLY valid JSON, same shape:
-{"clips":[{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>,"emojis":[{"word":"...","emoji":"..."}]}]}"""
+Keep the same JSON schema for clips. Add a top-level `lessons` array with 1-3 short imperative sentences (≤ 100 chars each) summarising the recurring mistakes you fixed — these will be injected into the junior's prompt next time. Examples:
+  "Don't snap end-time mid-sentence; look for the next period."
+  "Hook should not include 'kayak gini' filler — start with the verb."
+  "When clip is a story, the cta should tease 'part 2', not be a question."
+
+Output ONLY valid JSON, exactly:
+{"clips":[{"start":<float>,"end":<float>,"hook":"...","caption":"...","cta":"...","hashtags":["..."],"score":<int>,"emojis":[{"word":"...","emoji":"..."}]}],"lessons":["...","..."]}"""
 
 
 def _critique_pass(
@@ -434,18 +451,34 @@ def _critique_pass(
     original_user: str,
 ) -> list[dict] | None:
     """Run the critic agent over the curator's draft. Returns refined clips
-    on success, None on failure (caller falls back to draft)."""
+    on success, None on failure (caller falls back to draft).
+
+    Side effect: persists any 'lessons' the critic returned via
+    learnings.add_lessons() so future curator runs see them in their
+    system prompt. Over time the curator improves and the critic finds
+    less to refine."""
     try:
         critic_user = (
             "DRAFT CLIPS FROM JUNIOR EDITOR:\n"
             + json.dumps({"clips": draft_clips}, ensure_ascii=False, indent=2)
             + "\n\nORIGINAL TRANSCRIPT CONTEXT:\n"
             + original_user
-            + "\n\nReview, refine, and return the polished clips JSON."
+            + "\n\nReview, refine, return polished JSON, and include a 'lessons' array."
         )
         logger.info("running critic pass...")
         raw = provider.complete(CRITIC_SYSTEM, critic_user)
         data = _extract_json(raw)
+
+        # Harvest lessons before validating clips so we still learn even
+        # when the critic happened to return zero usable clips.
+        try:
+            from . import learnings
+            lessons = data.get("lessons") or []
+            if isinstance(lessons, list):
+                learnings.add_lessons([str(l) for l in lessons if l])
+        except Exception as e:
+            logger.warning(f"learnings save failed: {e}")
+
         refined, rejected = _validate_clips(data, transcript["duration"])
         if not refined:
             logger.warning(f"critic returned no valid clips ({len(rejected)} rejected); keeping draft")
