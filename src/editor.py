@@ -545,13 +545,21 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         )
 
     # Make our bundled fonts (Bangers / Permanent Marker / Anton) available
-    # to libass. ffmpeg path escaping on Windows: backslashes need doubling
-    # and colons need escaping inside the filter string.
+    # to libass. ffmpeg's filter-arg parser fights Windows drive-letter
+    # colons no matter how you escape them — easier to use a relative path
+    # from the cwd (output/final), which avoids the colon problem entirely.
     from . import font_setup
     fonts_dir = font_setup.ensure_fonts()
-    fontsdir_str = (
-        str(fonts_dir).replace("\\", "/").replace(":", r"\:")
-    )
+    try:
+        # Relative path from out_path.parent (= cwd) to the fonts dir
+        rel = Path(fonts_dir).relative_to(out_path.parent.parent)
+        # The launcher chdir's to clip folder via cwd=out_path.parent, so
+        # we need to walk up one and into .fonts/. e.g. '../.fonts'.
+        fontsdir_filter = ("../" + rel.as_posix()).replace(" ", r"\ ")
+    except ValueError:
+        # Fallback: absolute path. May fail on Windows due to escaping;
+        # if it does, libass will silently fall back to system fonts.
+        fontsdir_filter = fonts_dir.as_posix()
 
     vf = (
         f"{select_chain}"
@@ -560,7 +568,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"{blur_chain}"
         f"{kb_chain}"
-        f"subtitles={ass_path.name}:fontsdir='{fontsdir_str}',"
+        f"subtitles={ass_path.name}:fontsdir={fontsdir_filter},"
         f"{video_fade}"
     )
     # loudnorm targets TikTok / IG: -14 LUFS integrated, -1.5 dBTP peak.
