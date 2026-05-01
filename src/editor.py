@@ -568,7 +568,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"{blur_chain}"
         f"{kb_chain}"
-        f"subtitles={ass_path.name}:fontsdir={fontsdir_filter},"
+        f"subtitles=./{ass_path.name}:fontsdir={fontsdir_filter},"
         f"{video_fade}"
     )
     # loudnorm targets TikTok / IG: -14 LUFS integrated, -1.5 dBTP peak.
@@ -609,7 +609,9 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         "-profile:v", "high", "-level", "4.0",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
         "-movflags", "+faststart",
-        str(out_path.name),
+        # Prefix './' so a leading-dash filename (YouTube ID like '-05AS...')
+        # isn't misread by ffmpeg's argv parser as a flag option.
+        "./" + out_path.name,
     ]
     logger.info(f"ffmpeg render -> {out_path.name} ({duration:.1f}s source)")
     result = subprocess.run(cmd, cwd=out_path.parent, capture_output=True, text=True)
