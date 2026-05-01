@@ -43,5 +43,8 @@ output/.models/
 *.log
 Thumbs.db
 
+# auto-improve bot artifacts (generated per-run, not committed)
+ai_proposal.md
+
 # personal profile README draft (move to hellnoo/hellnoo repo)
 HELLNOO_PROFILE_README.md
