@@ -242,6 +242,14 @@ PAGE = """<!doctype html>
  .btn-ig{{background:rgba(232,121,249,0.10);color:var(--magenta);border-color:rgba(232,121,249,0.35)}}
  .btn-ig:hover{{background:rgba(232,121,249,0.22);border-color:rgba(232,121,249,0.6)}}
 
+ /* Delete buttons */
+ .video-actions{{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}}
+ .delete-form{{display:inline-flex;gap:6px;align-items:center}}
+ .delete-files-toggle{{font-size:10px;color:var(--dim);font-family:'JetBrains Mono',monospace;display:inline-flex;gap:4px;align-items:center;cursor:pointer;user-select:none}}
+ .delete-files-toggle input{{margin:0;cursor:pointer}}
+ .btn-delete{{padding:5px 9px;background:rgba(239,68,68,0.08);color:var(--red);border:1px solid rgba(239,68,68,0.25);border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;line-height:1}}
+ .btn-delete:hover{{background:rgba(239,68,68,0.18);border-color:rgba(239,68,68,0.5)}}
+
  /* QUEUE STRIP */
  .queue{{padding:14px 32px;font-size:13px;color:var(--muted);font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(38,38,47,0.5)}}
  .queue b{{color:var(--cyan);font-weight:500}}
@@ -469,6 +477,26 @@ async function igConnectPrompt() {{
 }}
 
 refreshConnectBtns();
+
+// --- Delete confirmation ---
+function confirmDelete(form) {{
+  const wipeFiles = form.querySelector('input[name="files"]')?.checked;
+  const msg = wipeFiles
+    ? 'Hapus video ini dari history DAN wipe semua file (mp4 source, transcripts, klip render) dari disk?\\n\\nIni IRREVERSIBLE.'
+    : 'Hapus video ini dari history (file di disk dipertahankan)?';
+  return confirm(msg);
+}}
+
+async function clearDone(e) {{
+  e.preventDefault();
+  if (!confirm('Clear semua video yang sudah selesai / error dari history?\\n(File di disk dipertahankan)')) return;
+  const r = await fetch('/videos/clear-done', {{ method: 'POST' }});
+  if (r.ok || r.status === 303) {{
+    location.reload();
+  }} else {{
+    alert('Failed: ' + await r.text());
+  }}
+}}
 </script>
 </body></html>
 """
@@ -646,6 +674,17 @@ def _render_video(v: dict) -> str:
     else:
         regen_btn = ''
 
+    # Delete button (always shown)
+    delete_btn = (
+        f'<form class="delete-form" method="post" action="/videos/{v["id"]}/delete" '
+        f'onsubmit="return confirmDelete(this)">'
+        f'<label class="delete-files-toggle" title="Also wipe the source mp4 + transcript cache + rendered clip files from disk">'
+        f'<input type="checkbox" name="files" value="1"> wipe files'
+        f'</label>'
+        f'<button type="submit" class="btn-delete" title="Remove this video from history">✕</button>'
+        f'</form>'
+    )
+
     dur = (v["duration"] or 0)
     dur_str = f'{int(dur//60)}m {int(dur%60)}s' if dur >= 60 else f'{int(dur)}s'
 
@@ -653,7 +692,7 @@ def _render_video(v: dict) -> str:
         f'<div class="video">'
         f'<div class="video-head">'
         f'<h2>{_esc(v["title"] or v["url"])}</h2>'
-        f'{regen_btn}'
+        f'<div class="video-actions">{regen_btn}{delete_btn}</div>'
         f'</div>'
         f'<div class="meta">'
         f'<span class="status {st_class}">{_esc(st)}</span>'
@@ -680,6 +719,13 @@ def index() -> str:
         queue_info = f'{qsize} job(s) queued'
     else:
         queue_info = 'idle &nbsp;·&nbsp; paste a URL above to start'
+
+    # Clear-all-done shortcut, only when at least one done/error video exists
+    if any(v.get("status") in ("done", "error") for v in videos):
+        queue_info += (
+            ' &nbsp;·&nbsp; <a href="#" onclick="clearDone(event)" '
+            'style="color:var(--muted);text-decoration:underline dotted">clear history</a>'
+        )
 
     if not videos:
         return PAGE.format(
@@ -816,6 +862,25 @@ def ig_upload(clip_id: int) -> RedirectResponse:
     upload_id = db.insert_upload(clip_id, "instagram")
     job_queue.put(("ig_upload", clip_id, upload_id))
     logger.info(f"queued IG upload: clip_id={clip_id} upload_id={upload_id}")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/videos/{video_id}/delete")
+def video_delete(video_id: int, files: int = Form(0)) -> RedirectResponse:
+    """Delete a video + its clips + upload records. If files=1, also remove
+    the rendered clip mp4s, source mp4, and cached transcripts/diarize."""
+    result = db.delete_video(video_id, also_files=bool(files))
+    if not result.get("deleted"):
+        raise HTTPException(404, result.get("reason", "not found"))
+    logger.info(f"deleted video {video_id} (files={bool(files)}): {result}")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/videos/clear-done")
+def videos_clear_done() -> RedirectResponse:
+    """Bulk-remove all done/error videos from the DB (files preserved)."""
+    r = db.delete_all_done()
+    logger.info(f"clear-done removed {r['removed']} videos")
     return RedirectResponse("/", status_code=303)
 
 

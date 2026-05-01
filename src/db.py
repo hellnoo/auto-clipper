@@ -199,6 +199,85 @@ def get_video(video_id: int) -> dict | None:
         return dict(r) if r else None
 
 
+def delete_video(video_id: int, also_files: bool = False) -> dict:
+    """Delete a video, all its clips, and all upload records.
+    If also_files=True, also remove the rendered clip files + caption .txt
+    from output/final/ AND the source mp4 + transcript caches in output/raw/.
+    Returns a summary of what got removed."""
+    from pathlib import Path
+    deleted_files: list[str] = []
+    with conn() as c:
+        v = c.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
+        if not v:
+            return {"deleted": False, "reason": "not found"}
+        v = dict(v)
+        clips = c.execute("SELECT * FROM clips WHERE video_id=?", (video_id,)).fetchall()
+        clip_paths = [dict(r).get("path") for r in clips]
+        # Cascade-delete in DB
+        clip_ids = [dict(r)["id"] for r in clips]
+        if clip_ids:
+            placeholders = ",".join("?" * len(clip_ids))
+            c.execute(f"DELETE FROM clip_uploads WHERE clip_id IN ({placeholders})", clip_ids)
+        c.execute("DELETE FROM clips WHERE video_id=?", (video_id,))
+        c.execute("DELETE FROM videos WHERE id=?", (video_id,))
+
+    if also_files:
+        # Final clips + their .txt caption files + .ass subtitle files
+        for p in clip_paths:
+            if not p:
+                continue
+            for path in (Path(p), Path(p).with_suffix(".txt"), Path(p).with_suffix(".ass")):
+                try:
+                    if path.exists():
+                        path.unlink()
+                        deleted_files.append(path.name)
+                except Exception:
+                    pass
+        # Source mp4 + transcript caches + diarize cache
+        src = v.get("path")
+        if src:
+            src_path = Path(src)
+            if src_path.exists():
+                try:
+                    src_path.unlink()
+                    deleted_files.append(src_path.name)
+                except Exception:
+                    pass
+            # Caches sit next to the source with extra suffixes
+            stem = src_path.with_suffix("")
+            for ext in (".transcript.tiny.json", ".transcript.base.json",
+                        ".transcript.small.json", ".transcript.medium.json",
+                        ".transcript.large-v3.json", ".diarize.json"):
+                f = Path(str(src_path) + ext.replace(".transcript", ".transcript"))
+                if f.exists():
+                    try:
+                        f.unlink()
+                        deleted_files.append(f.name)
+                    except Exception:
+                        pass
+
+    return {
+        "deleted": True,
+        "video_id": video_id,
+        "clips_removed": len(clip_paths),
+        "files_removed": len(deleted_files),
+        "files": deleted_files[:20],
+    }
+
+
+def delete_all_done() -> dict:
+    """Bulk-delete all videos with status='done' or 'error' (DB only, files preserved)."""
+    with conn() as c:
+        rows = c.execute("SELECT id FROM videos WHERE status IN ('done','error')").fetchall()
+        ids = [dict(r)["id"] for r in rows]
+    removed = 0
+    for vid in ids:
+        r = delete_video(vid, also_files=False)
+        if r.get("deleted"):
+            removed += 1
+    return {"removed": removed}
+
+
 if __name__ == "__main__":
     init()
     print(f"DB initialized at {config.DB_PATH}")
