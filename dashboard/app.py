@@ -62,6 +62,11 @@ def _worker() -> None:
                 _do_yt_upload(int(clip_id), int(upload_id), privacy)
                 continue
 
+            if kind == "ig_upload":
+                _, clip_id, upload_id = job
+                _do_ig_upload(int(clip_id), int(upload_id))
+                continue
+
             # Default: video-processing jobs (kind in {"url","regen"})
             payload = job[1]
             speakers = job[2] if len(job) > 2 else None
@@ -121,6 +126,36 @@ def _do_yt_upload(clip_id: int, upload_id: int, privacy: str) -> None:
         logger.success(f"[worker] done {label} -> {result['url']}")
     except Exception as e:
         logger.exception(f"[worker] yt-upload failed clip={clip_id}")
+        db.set_upload_status(upload_id, "error", error=str(e)[:500])
+
+
+def _do_ig_upload(clip_id: int, upload_id: int) -> None:
+    """Run an Instagram Reel upload."""
+    from src.uploaders import instagram as ig
+    label = f"ig-upload clip={clip_id}"
+    _current["label"] = label
+    logger.info(f"[worker] start {label}")
+    try:
+        clips = [c for c in db.list_clips() if c["id"] == clip_id]
+        if not clips:
+            raise RuntimeError(f"clip {clip_id} not found")
+        clip = clips[0]
+        path = clip.get("path")
+        if not path or not Path(path).exists():
+            raise RuntimeError(f"clip file missing: {path}")
+        caption = clip.get("caption") or clip.get("hook") or ""
+        hashtags_csv = clip.get("hashtags") or ""
+        tags = [t.strip() for t in hashtags_csv.split(",") if t.strip()]
+
+        db.set_upload_status(upload_id, "uploading")
+        result = ig.upload_reel(path, caption=caption, hashtags=tags)
+        db.set_upload_status(
+            upload_id, "done",
+            remote_id=result.get("id"), remote_url=result.get("url"),
+        )
+        logger.success(f"[worker] done {label} -> {result.get('url')}")
+    except Exception as e:
+        logger.exception(f"[worker] ig-upload failed clip={clip_id}")
         db.set_upload_status(upload_id, "error", error=str(e)[:500])
 
 
@@ -202,6 +237,10 @@ PAGE = """<!doctype html>
  .btn-upload:hover{{background:rgba(255,107,107,0.22);border-color:rgba(255,107,107,0.6)}}
  .btn-connect{{padding:8px 14px;background:rgba(255,107,107,0.10);color:#ff6b6b;border:1px solid rgba(255,107,107,0.35);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px}}
  .btn-connect.connected{{background:rgba(34,197,94,0.10);color:var(--green);border-color:rgba(34,197,94,0.35)}}
+ #ig-connect-btn{{background:rgba(232,121,249,0.10);color:var(--magenta);border-color:rgba(232,121,249,0.35)}}
+ #ig-connect-btn.connected{{background:rgba(34,197,94,0.10);color:var(--green);border-color:rgba(34,197,94,0.35)}}
+ .btn-ig{{background:rgba(232,121,249,0.10);color:var(--magenta);border-color:rgba(232,121,249,0.35)}}
+ .btn-ig:hover{{background:rgba(232,121,249,0.22);border-color:rgba(232,121,249,0.6)}}
 
  /* QUEUE STRIP */
  .queue{{padding:14px 32px;font-size:13px;color:var(--muted);font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(38,38,47,0.5)}}
@@ -296,6 +335,8 @@ PAGE = """<!doctype html>
  </form>
  <button id="yt-connect-btn" class="btn-connect" title="Connect YouTube account for one-click upload"
          onclick="ytConnect()">↑ YouTube</button>
+ <button id="ig-connect-btn" class="btn-connect" title="Connect Instagram for Reels auto-upload"
+         onclick="igConnectPrompt()">↑ Instagram</button>
 </header>
 <div class="queue"><span class="dot"></span><span>{queue_info}</span></div>
 <main>{body}</main>
@@ -334,27 +375,33 @@ PAGE = """<!doctype html>
   document.addEventListener('ended', () => setTimeout(tick, 500), true);
 }})();
 
-// --- YouTube connect button ---
-async function refreshYtBtn() {{
+// --- Connect-button status refresher ---
+async function refreshConnectBtns() {{
   try {{
     const r = await fetch('/uploaders/status');
     const data = await r.json();
-    const btn = document.getElementById('yt-connect-btn');
-    if (!btn) return;
-    if (data.youtube && data.youtube.connected) {{
-      btn.classList.add('connected');
-      btn.textContent = '✓ YouTube connected';
-      btn.title = 'YouTube account connected; click to reconnect';
-    }} else {{
-      btn.classList.remove('connected');
-      btn.textContent = '↑ Connect YouTube';
+    const yt = document.getElementById('yt-connect-btn');
+    if (yt) {{
+      if (data.youtube && data.youtube.connected) {{
+        yt.classList.add('connected'); yt.textContent = '✓ YouTube';
+      }} else {{
+        yt.classList.remove('connected'); yt.textContent = '↑ Connect YouTube';
+      }}
+    }}
+    const ig = document.getElementById('ig-connect-btn');
+    if (ig) {{
+      if (data.instagram && data.instagram.connected) {{
+        ig.classList.add('connected'); ig.textContent = '✓ Instagram';
+      }} else {{
+        ig.classList.remove('connected'); ig.textContent = '↑ Connect Instagram';
+      }}
     }}
   }} catch (e) {{}}
 }}
+
 async function ytConnect() {{
   const btn = document.getElementById('yt-connect-btn');
-  btn.disabled = true;
-  btn.textContent = 'opening browser…';
+  btn.disabled = true; btn.textContent = 'opening browser…';
   try {{
     const r = await fetch('/uploaders/youtube/connect', {{ method: 'POST' }});
     if (!r.ok) {{
@@ -368,10 +415,60 @@ async function ytConnect() {{
     alert('Connect failed: ' + e);
   }} finally {{
     btn.disabled = false;
-    refreshYtBtn();
+    refreshConnectBtns();
   }}
 }}
-refreshYtBtn();
+
+async function igConnectPrompt() {{
+  // Two-step prompt: username/password, then optional 2FA code if IG asks.
+  const username = prompt('Instagram username:');
+  if (!username) return;
+  const password = prompt('Instagram password (sent to local server only, not stored):');
+  if (!password) return;
+  const btn = document.getElementById('ig-connect-btn');
+  btn.disabled = true; btn.textContent = 'logging in…';
+
+  async function doLogin(code) {{
+    const fd = new FormData();
+    fd.append('username', username);
+    fd.append('password', password);
+    if (code) fd.append('verification_code', code);
+    const r = await fetch('/uploaders/instagram/connect', {{ method: 'POST', body: fd }});
+    return r;
+  }}
+
+  try {{
+    let r = await doLogin();
+    if (r.status === 200) {{
+      let data = await r.json();
+      if (data.ok) {{
+        alert('Connected: @' + data.username);
+      }} else if (data.code === '2fa_required') {{
+        const code = prompt('IG sent a 2FA code. Enter it:');
+        if (!code) {{ btn.disabled = false; refreshConnectBtns(); return; }}
+        r = await doLogin(code);
+        if (r.status === 200) {{
+          const d2 = await r.json();
+          if (d2.ok) alert('Connected: @' + d2.username);
+          else alert('2FA failed: ' + (d2.message || 'unknown'));
+        }} else {{
+          alert('2FA failed: ' + (await r.text()));
+        }}
+      }} else {{
+        alert('Connect failed: ' + (data.message || JSON.stringify(data)));
+      }}
+    }} else {{
+      alert('Connect failed:\\n\\n' + (await r.text()));
+    }}
+  }} catch (e) {{
+    alert('Connect failed: ' + e);
+  }} finally {{
+    btn.disabled = false;
+    refreshConnectBtns();
+  }}
+}}
+
+refreshConnectBtns();
 </script>
 </body></html>
 """
@@ -476,8 +573,9 @@ def _render_clip(c: dict) -> str:
             else:
                 chips.append(f'<span class="upload-chip">{_esc(plat)} {_esc(ust)}</span>')
         chips_html = "".join(chips)
-        # Show upload button only if there's no successful YT upload yet
+        # Show upload buttons only if no successful upload yet on that platform
         has_yt_done = any(u["platform"] == "youtube" and u["status"] == "done" for u in ups)
+        has_ig_done = any(u["platform"] == "instagram" and u["status"] == "done" for u in ups)
         yt_btn = ""
         if not has_yt_done:
             yt_btn = (
@@ -490,9 +588,16 @@ def _render_clip(c: dict) -> str:
                 f'<button type="submit" class="btn-upload" title="Upload to YouTube">↑ YT</button>'
                 f'</form>'
             )
+        ig_btn = ""
+        if not has_ig_done:
+            ig_btn = (
+                f'<form method="post" action="/uploaders/instagram/upload/{c["id"]}" class="upload-form">'
+                f'<button type="submit" class="btn-upload btn-ig" title="Upload as Instagram Reel">↑ IG</button>'
+                f'</form>'
+            )
         upload_html = (
             f'<div class="uploads">'
-            f'{chips_html}{yt_btn}'
+            f'{chips_html}{yt_btn}{ig_btn}'
             f'</div>'
         )
 
@@ -653,7 +758,11 @@ def api_clips(video_id: int) -> dict:
 def uploader_status() -> dict:
     """Returns connection state per platform so the UI can show 'connected'/'connect' buttons."""
     from src.uploaders import youtube as yt
-    return {"youtube": {"connected": yt.is_connected()}}
+    from src.uploaders import instagram as ig
+    return {
+        "youtube": {"connected": yt.is_connected()},
+        "instagram": {"connected": ig.is_connected()},
+    }
 
 
 @app.post("/uploaders/youtube/connect")
@@ -669,6 +778,52 @@ def yt_connect() -> dict:
     except Exception as e:
         logger.exception("youtube connect failed")
         raise HTTPException(500, f"connect failed: {e}")
+
+
+@app.post("/uploaders/instagram/connect")
+def ig_connect(
+    username: str = Form(...),
+    password: str = Form(...),
+    verification_code: str = Form(""),
+) -> dict:
+    """Login to Instagram. Password is consumed inline and not persisted —
+    only session cookies hit disk. Returns {'ok','username'} on success or
+    {'ok':False, 'code':'2fa_required'} when IG asks for 2FA."""
+    from src.uploaders import instagram as ig
+    code = verification_code.strip() or None
+    try:
+        info = ig.connect_account(username.strip(), password, verification_code=code)
+        return {"ok": True, "username": info["username"]}
+    except ig._InstagramError as e:
+        if getattr(e, "code", "") == "2fa_required":
+            return {"ok": False, "code": "2fa_required",
+                    "message": "Instagram needs a 2FA code. Resubmit with verification_code set."}
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("ig connect failed")
+        raise HTTPException(500, f"connect failed: {e}")
+
+
+@app.post("/uploaders/instagram/upload/{clip_id}")
+def ig_upload(clip_id: int) -> RedirectResponse:
+    """Queue an Instagram Reel upload."""
+    clips = [c for c in db.list_clips() if c["id"] == clip_id]
+    if not clips:
+        raise HTTPException(404, "clip not found")
+    clip = clips[0]
+    if not clip.get("path") or not Path(clip["path"]).exists():
+        raise HTTPException(409, "clip file missing on disk")
+    upload_id = db.insert_upload(clip_id, "instagram")
+    job_queue.put(("ig_upload", clip_id, upload_id))
+    logger.info(f"queued IG upload: clip_id={clip_id} upload_id={upload_id}")
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/uploaders/instagram/disconnect")
+def ig_disconnect() -> dict:
+    from src.uploaders import instagram as ig
+    ig.disconnect()
+    return {"ok": True}
 
 
 @app.post("/uploaders/youtube/upload/{clip_id}")
