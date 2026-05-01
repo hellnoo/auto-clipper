@@ -22,11 +22,11 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Montserrat,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,2,8,100,100,140,1
+Style: Default,Bangers,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&HA0000000,0,0,0,0,100,100,0,0,1,6,2,8,100,100,140,1
 Style: Hook,Impact,88,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,8,4,2,50,50,420,1
 Style: Emoji,Segoe UI Emoji,160,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,6,5,0,0,0,1
-Style: Watermark,Inter,38,&H40FFFFFF,&H000000FF,&H80000000,&H00000000,1,0,0,0,100,100,0,0,1,3,1,9,50,50,40,1
-Style: EndCard,Impact,68,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,1,0,0,0,100,100,0,0,1,7,3,2,100,100,360,1
+Style: Watermark,Permanent Marker,80,&HB0FFFFFF,&H000000FF,&HB0000000,&H00000000,0,0,0,0,100,100,0,0,1,3,2,5,0,0,0,1
+Style: EndCard,Bangers,84,&H0000F0FF,&H00FFFFFF,&H00000000,&HC0000000,0,0,0,0,100,100,0,0,1,7,3,2,100,100,360,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -100,10 +100,12 @@ def generate_ass(
     if wm and wm.strip():
         wm_text = _escape_ass_text(wm.strip())
         wm_end = clip_duration if clip_duration else 9999.0
-        # Slow fade in to avoid distracting from the hook moment.
+        # Centered, transparent, slight tilt — like a photo watermark stamp.
+        # \an5\pos(540,1620) anchors center at lower-mid of frame (above
+        # bottom UI but below hook). \frz=-8 gives subtle handwritten tilt.
         dialogues.append(
             f"Dialogue: 0,{_ass_time(HOOK_DURATION + 0.2)},{_ass_time(wm_end)},Watermark,,0,0,0,,"
-            + r"{\fad(400,300)}" + wm_text
+            + r"{\fad(400,300)\an5\pos(540,1620)\frz-8}" + wm_text
         )
 
     if hook:
@@ -539,6 +541,15 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
             "crop=w=1080:h=1920:x='(iw-1080)/2':y='(ih-1920)/2',"
         )
 
+    # Make our bundled fonts (Bangers / Permanent Marker / Anton) available
+    # to libass. ffmpeg path escaping on Windows: backslashes need doubling
+    # and colons need escaping inside the filter string.
+    from . import font_setup
+    fonts_dir = font_setup.ensure_fonts()
+    fontsdir_str = (
+        str(fonts_dir).replace("\\", "/").replace(":", r"\:")
+    )
+
     vf = (
         f"{select_chain}"
         f"{crop_filter},"
@@ -546,7 +557,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"{blur_chain}"
         f"{kb_chain}"
-        f"subtitles={ass_path.name},"
+        f"subtitles={ass_path.name}:fontsdir='{fontsdir_str}',"
         f"{video_fade}"
     )
     # loudnorm targets TikTok / IG: -14 LUFS integrated, -1.5 dBTP peak.
