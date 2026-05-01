@@ -90,6 +90,7 @@ def generate_ass(
     emojis: list[dict] | None = None,
     clip_duration: float | None = None,
     watermark: str | None = None,
+    cta: str | None = None,
 ) -> None:
     dialogues: list[str] = []
 
@@ -364,9 +365,11 @@ def generate_ass(
                 f"Dialogue: 0,{_ass_time(dlg_start)},{_ass_time(dlg_end)},Default,,0,0,0,,{text}"
             )
 
-    # End-card CTA — last ~1.0 s of the clip. Pop in from below, settle, fade out.
-    if config.END_CARD_TEXT and clip_duration and clip_duration > 4.0:
-        cta = config.END_CARD_TEXT.strip()
+    # End-card CTA — last ~1.0 s of the clip. Per-clip cta from LLM beats the
+    # global config default; both can be empty to skip the card entirely.
+    cta_text_raw = (cta or "").strip() or (config.END_CARD_TEXT or "").strip()
+    if cta_text_raw and clip_duration and clip_duration > 4.0:
+        cta = cta_text_raw
         if cta:
             cta_dur = 1.2  # display this long
             cta_start = max(0.0, clip_duration - cta_dur)
@@ -571,6 +574,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         emojis=clip.get("emojis"),
         clip_duration=out_dur,
         watermark=clip.get("watermark"),
+        cta=clip.get("cta"),
     )
 
     cmd = ["ffmpeg", "-y"]

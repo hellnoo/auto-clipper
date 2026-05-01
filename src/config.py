@@ -47,7 +47,10 @@ CLIP_COUNT_MAX = int(env("CLIP_COUNT_MAX", "7"))
 # playback issues (timestamp splices, dynamic filters) defaults OFF.
 # Toggle to "1" in .env to opt back in when you've validated stability.
 WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set "" to disable
-END_CARD_TEXT = env("END_CARD_TEXT", "follow biar gak ketinggalan 👀")  # set "" to disable
+END_CARD_TEXT = env("END_CARD_TEXT", "")  # static fallback; per-clip cta from
+                                          # the LLM beats this. Empty by default
+                                          # — pro clips don't need 'follow for
+                                          # more' baked in.
 SILENCE_CUT = env("SILENCE_CUT", "0") == "1"             # cut dead air > 700ms (PTS-heavy)
 KEN_BURNS = env("KEN_BURNS", "0") == "1"                 # slow zoom (eval=frame, can cause
                                                           # browser-stall on some Windows builds)

@@ -48,12 +48,19 @@ Avoid: rambling intros, filler ("um", "so basically"), generic motivation, anyth
 # Output fields
 - `hook`: ≤ 70 chars. On-screen text. No period at end. Punchy. Use the same language as the transcript. For non-English transcripts, use the same casual register the speaker uses (e.g. Indonesian "lo/gue" vs "anda" — match what's in the transcript).
 - `caption`: 1-2 sentences for the post description, in the source language. Hook the reader, tease the payoff. End with a CTA or question.
+- `cta`: ≤ 35 chars. **Closing card line shown for the last 1.2 s of the clip.** Must be SPECIFIC to THIS clip's content — never generic "follow for more" / "like and subscribe". Good patterns (pick what matches):
+  - **Provocative question** tied to the topic ("Setuju gak?", "Kalo lo gimana?", "Nama lo siapa?")
+  - **Mini-cliffhanger** ("Bagian 2 minggu depan", "Ada lanjutannya")
+  - **Quotable punchline echo** — the most quotable line from the clip, shortened
+  - **Counterintuitive challenge** ("Coba praktek seminggu", "Try it tomorrow")
+  - **Direct confrontation** ("Akui aja, lo pernah", "Jujur, kapan terakhir...")
+  Skip cta entirely (set to "") when nothing fits — better silent than generic.
 - `hashtags`: 3-6 relevant tags (lowercase, no #). Source language preferred.
 - `score`: 0-100. 80+ = genuinely strong, 60-79 = solid, below 60 = don't bother.
 - `emojis`: 4-8 entries. Each is `{{"word":"<single word from the clip transcript, in the original language>","emoji":"<single emoji>"}}`. Pick words that hit emotionally — money, surprise, anger, success, fail, secret, mind-blown, fire, time, etc. The emoji will pop above the caption when that word is spoken. Skip filler words. Same word may appear once.
 
 Return ONLY a JSON object. No markdown fences. No prose. Exactly this shape:
-{{"clips":[{{"start":<float>,"end":<float>,"hook":"...","caption":"...","hashtags":["..."],"score":<int>,"emojis":[{{"word":"...","emoji":"..."}}]}}]}}"""
+{{"clips":[{{"start":<float>,"end":<float>,"hook":"...","caption":"...","cta":"...","hashtags":["..."],"score":<int>,"emojis":[{{"word":"...","emoji":"..."}}]}}]}}"""
 
 
 def _condense_segments(segments: list[dict], target_chunk_sec: float = 20.0) -> list[dict]:
@@ -282,6 +289,7 @@ def _validate_clips(data: dict, total_duration: float) -> tuple[list[dict], list
             "end": end,
             "hook": str(c.get("hook") or "").strip()[:120],
             "caption": str(c.get("caption") or "").strip(),
+            "cta": str(c.get("cta") or "").strip()[:50],
             "hashtags": [str(h).lstrip("#").strip() for h in (c.get("hashtags") or []) if h],
             "score": float(c.get("score") or 0),
             "emojis": emojis,
