@@ -549,11 +549,17 @@ document.addEventListener('click', (e) => {{
 
 
 def _media_url(abs_path: str | None) -> str | None:
+    """Return /media/<rel-path>?v=<mtime> so browsers refetch when the file
+    has been re-rendered (cache-bust)."""
     if not abs_path:
         return None
     try:
-        rel = Path(abs_path).resolve().relative_to(config.OUTPUT_DIR.resolve())
-        return f"/media/{rel.as_posix()}"
+        p = Path(abs_path).resolve()
+        rel = p.relative_to(config.OUTPUT_DIR.resolve())
+        url = f"/media/{rel.as_posix()}"
+        if p.exists():
+            url += f"?v={int(p.stat().st_mtime)}"
+        return url
     except ValueError:
         return None
 

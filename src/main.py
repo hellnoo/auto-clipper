@@ -173,6 +173,16 @@ def regenerate_video(
     with db.conn() as c:
         c.execute("DELETE FROM clips WHERE video_id=?", (video_id,))
 
+    # Wipe stale rendered files from prior runs so leftover clip6/clip7
+    # files don't sit on disk after a 5-clip regen, and so any cached
+    # browser <video> can't replay them.
+    source_stem = Path(source_path).stem
+    for old in config.FINAL_DIR.glob(f"{source_stem}_clip*"):
+        try:
+            old.unlink()
+        except Exception:
+            pass
+
     t = transcriber.transcribe(source_path, expected_speakers=effective_speakers)
     try:
         n = _analyze_and_render(v["url"], source_path, t)
