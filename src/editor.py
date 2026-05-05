@@ -111,17 +111,26 @@ def generate_ass(
             (fname, 80, -8),
         )
         ass_font, fs, frz = preset
-        # True-center: y=960 is the exact middle of 1920 in 9:16. Anti-crop —
-        # any platform that crops top or bottom strips still keeps the watermark.
-        # Alpha &HC0 ≈ 25% opaque — visible but doesn't fight the speaker's face.
-        # Backslashes inside an f-string are escaped as \\ so libass sees a
-        # single backslash.
+        # True-center watermark — pure white, soft transparent, no harsh
+        # dark outline. The earlier dark outline + transparent fill made
+        # the mark read as 'dirty' on bright backgrounds; this is closer
+        # to a clean photo watermark.
+        # Style overrides:
+        #   \1c white                — fill color
+        #   \3c white                — outline color matches fill (vanishes)
+        #   \1a&H80&  (~50% opaque)  — main text alpha
+        #   \3a&HF0&  (~6% opaque)   — outline barely visible (just for
+        #                              legibility on white-on-white frames)
+        #   \bord1                   — thin border (down from 3)
+        #   \4a&HFF&                 — kill the shadow alpha entirely
         dialogues.append(
             f"Dialogue: 0,{_ass_time(HOOK_DURATION + 0.2)},{_ass_time(wm_end)},Watermark,,0,0,0,,"
             + (
                 r"{\fad(500,400)\an5\pos(540,960)"
                 + rf"\fn{ass_font}\fs{fs}\frz{frz}"
-                + r"\1a&HC0&\3a&HC0&"   # primary + outline alpha both ~25% opaque
+                + r"\1c&HFFFFFF&\3c&HFFFFFF&"
+                + r"\1a&H80&\3a&HF0&\4a&HFF&"
+                + r"\bord1"
                 + r"}"
             )
             + wm_text
