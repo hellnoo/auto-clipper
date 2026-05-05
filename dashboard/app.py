@@ -194,7 +194,7 @@ PAGE = """<!doctype html>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Bangers&family=Anton&family=Righteous&family=Bungee&family=Permanent+Marker&family=Caveat:wght@700&family=Pacifico&family=Lobster&family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
  *{{box-sizing:border-box}}
  :root{{
@@ -244,6 +244,22 @@ PAGE = """<!doctype html>
  #ig-connect-btn.connected{{background:rgba(34,197,94,0.10);color:var(--green);border-color:rgba(34,197,94,0.35)}}
  .btn-ig{{background:rgba(232,121,249,0.10);color:var(--magenta);border-color:rgba(232,121,249,0.35)}}
  .btn-ig:hover{{background:rgba(232,121,249,0.22);border-color:rgba(232,121,249,0.6)}}
+
+ /* Custom font picker — shows each font rendered in its own family */
+ .font-picker{{position:relative;display:inline-block}}
+ .font-picker-btn{{padding:10px 14px;background:transparent;border:0;border-left:1px solid var(--border);color:var(--text);font-size:14px;font-family:inherit;outline:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-width:140px}}
+ .font-picker-btn .font-current{{flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+ .font-picker-btn .font-arrow{{color:var(--dim);font-size:10px}}
+ .font-picker-panel{{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:240px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 16px 40px -8px rgba(0,0,0,0.5);z-index:100;padding:6px;max-height:340px;overflow-y:auto}}
+ .font-picker-panel.open{{display:block}}
+ .font-option{{padding:10px 14px;border-radius:6px;color:var(--text);cursor:pointer;font-size:24px;line-height:1.1;transition:background 0.12s;display:flex;align-items:baseline;justify-content:space-between;gap:8px}}
+ .font-option:hover{{background:rgba(34,211,238,0.10)}}
+ .font-option.selected{{background:rgba(34,211,238,0.16);color:var(--cyan)}}
+ .font-option-name{{font-size:10px;color:var(--dim);font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:0.05em;flex-shrink:0}}
+ /* Smaller picker variant for the per-video regen row */
+ .font-picker.small .font-picker-btn{{padding:5px 8px;font-size:11px;min-width:100px;background:var(--surface2);border:1px solid var(--border);border-radius:6px}}
+ .font-picker.small .font-picker-panel{{min-width:220px}}
+ .font-picker.small .font-option{{font-size:20px;padding:8px 12px}}
 
  /* Delete buttons */
  .video-actions{{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}}
@@ -333,7 +349,7 @@ PAGE = """<!doctype html>
   <input type="text" name="watermark" maxlength="32" placeholder="@yourname"
          title="Watermark on every clip (your @username). Leave blank for no watermark."
          style="width:140px;padding:12px 14px;background:transparent;border:0;border-left:1px solid var(--border);color:var(--text);font-size:13px;font-family:inherit;outline:none">
-  <select name="wm_font" title="Watermark font style">{wm_font_options_default}</select>
+  {wm_font_picker_default}
   <select name="speakers" title="Speaker count for diarization (color per speaker)">
    <option value="0">auto speakers</option>
    <option value="1">1 speaker</option>
@@ -501,6 +517,32 @@ async function clearDone(e) {{
     alert('Failed: ' + await r.text());
   }}
 }}
+
+// --- Font picker (open/close + select) ---
+function toggleFontPicker(btn) {{
+  // Close any other open picker first
+  document.querySelectorAll('.font-picker-panel.open').forEach(p => {{
+    if (p !== btn.nextElementSibling) p.classList.remove('open');
+  }});
+  btn.nextElementSibling.classList.toggle('open');
+}}
+function selectFont(opt) {{
+  const picker = opt.closest('.font-picker');
+  const value = opt.dataset.value;
+  picker.querySelector('input[type=hidden]').value = value;
+  const cur = picker.querySelector('.font-current');
+  cur.textContent = value;
+  cur.style.fontFamily = `'${{value}}',cursive,sans-serif`;
+  picker.querySelectorAll('.font-option').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  picker.querySelector('.font-picker-panel').classList.remove('open');
+}}
+// Close on outside click
+document.addEventListener('click', (e) => {{
+  if (!e.target.closest('.font-picker')) {{
+    document.querySelectorAll('.font-picker-panel.open').forEach(p => p.classList.remove('open'));
+  }}
+}});
 </script>
 </body></html>
 """
@@ -531,6 +573,41 @@ def _file_size(abs_path: str | None) -> str | None:
     if not p.exists():
         return None
     return _human_size(p.stat().st_size)
+
+
+def _build_font_picker(name: str, current: str, small: bool = True) -> str:
+    """Render the custom watermark-font picker. Each option in the dropdown
+    panel is rendered IN its own font so the user sees the actual style
+    before selecting. Hidden input named `name` carries the value to the form."""
+    from src.font_setup import WATERMARK_FONT_PRESETS
+    options = []
+    current = (current or "").strip() or next(iter(WATERMARK_FONT_PRESETS.values()))[0]
+    for label, (font_name, _size, _frz) in WATERMARK_FONT_PRESETS.items():
+        sel_cls = " selected" if font_name == current else ""
+        # Sample text shows how the watermark would actually look.
+        sample = "@yourname"
+        # Friendly name (label minus the parenthesised description) for the line below
+        family = font_name
+        options.append(
+            f'<div class="font-option{sel_cls}" data-value="{_esc(font_name)}" '
+            f'style="font-family:\'{_esc(font_name)}\',cursive,sans-serif" '
+            f'onclick="selectFont(this)">'
+            f'<span>{_esc(sample)}</span>'
+            f'<span class="font-option-name">{_esc(family)}</span>'
+            f'</div>'
+        )
+    cls = "font-picker small" if small else "font-picker"
+    return (
+        f'<div class="{cls}">'
+        f'<button type="button" class="font-picker-btn" onclick="toggleFontPicker(this)">'
+        f'<span class="font-current" style="font-family:\'{_esc(current)}\',cursive,sans-serif">'
+        f'{_esc(current)}</span>'
+        f'<span class="font-arrow">▾</span>'
+        f'</button>'
+        f'<div class="font-picker-panel">{"".join(options)}</div>'
+        f'<input type="hidden" name="{_esc(name)}" value="{_esc(current)}">'
+        f'</div>'
+    )
 
 
 def _render_clip(c: dict) -> str:
@@ -664,12 +741,10 @@ def _render_video(v: dict) -> str:
             sel = " selected" if n == current_spk else ""
             opts.append(f'<option value="{n}"{sel}>{label}</option>')
         wm_attr = _esc(current_wm)
-        # Per-video watermark font dropdown
-        from src.font_setup import WATERMARK_FONT_PRESETS
-        wm_font_opts = []
-        for label, (name, _, _) in WATERMARK_FONT_PRESETS.items():
-            sel = " selected" if name == current_wm_font else ""
-            wm_font_opts.append(f'<option value="{_esc(name)}"{sel}>{_esc(label)}</option>')
+        # Per-video watermark font picker (shows preview of each font)
+        wm_font_picker = _build_font_picker(
+            name="wm_font", current=current_wm_font, small=True,
+        )
         regen_btn = (
             f'<form class="regen" method="post" action="/regenerate/{v["id"]}">'
             f'<input type="text" name="watermark" value="{wm_attr}" maxlength="32" '
@@ -677,10 +752,7 @@ def _render_video(v: dict) -> str:
             f'style="padding:5px 8px;background:var(--surface2);color:var(--text);'
             f'border:1px solid var(--border);border-radius:6px;font-size:11px;width:110px;'
             f'font-family:inherit;outline:none">'
-            f'<select name="wm_font" title="Watermark font" '
-            f'style="padding:5px 8px;background:var(--surface2);color:var(--muted);'
-            f'border:1px solid var(--border);border-radius:6px;font-size:11px;'
-            f'font-family:inherit;cursor:pointer">{"".join(wm_font_opts)}</select>'
+            f'{wm_font_picker}'
             f'<select name="speakers" title="Speaker count for diarization">{"".join(opts)}</select>'
             f'<button type="submit" class="btn-regen" '
             f'title="Re-run analyze + render using cached source/transcript">↻ regenerate</button>'
@@ -748,11 +820,16 @@ def index() -> str:
         f'<option value="{_esc(name)}">{_esc(label)}</option>'
         for label, (name, _, _) in WATERMARK_FONT_PRESETS.items()
     )
+    # Custom picker (header form): default = first preset font
+    default_font_name = next(iter(WATERMARK_FONT_PRESETS.values()))[0]
+    wm_font_picker_default = _build_font_picker(
+        name="wm_font", current=default_font_name, small=False,
+    )
 
     if not videos:
         return PAGE.format(
             queue_info=queue_info,
-            wm_font_options_default=wm_font_options_default,
+            wm_font_picker_default=wm_font_picker_default,
             body=(
                 '<div class="empty">'
                 '<span class="empty-emoji">🎬</span>'
@@ -762,7 +839,7 @@ def index() -> str:
         )
     return PAGE.format(
         queue_info=queue_info,
-        wm_font_options_default=wm_font_options_default,
+        wm_font_picker_default=wm_font_picker_default,
         body="".join(_render_video(v) for v in videos),
     )
 
