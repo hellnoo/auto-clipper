@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS videos (
     error TEXT,
     expected_speakers INTEGER DEFAULT 0,
     watermark TEXT,
+    watermark_font TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -45,6 +46,7 @@ _MIGRATIONS = [
     ("clips", "emojis", "ALTER TABLE clips ADD COLUMN emojis TEXT"),
     ("videos", "expected_speakers", "ALTER TABLE videos ADD COLUMN expected_speakers INTEGER DEFAULT 0"),
     ("videos", "watermark", "ALTER TABLE videos ADD COLUMN watermark TEXT"),
+    ("videos", "watermark_font", "ALTER TABLE videos ADD COLUMN watermark_font TEXT"),
 ]
 
 

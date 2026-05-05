@@ -47,6 +47,7 @@ CLIP_COUNT_MAX = int(env("CLIP_COUNT_MAX", "7"))
 # playback issues (timestamp splices, dynamic filters) defaults OFF.
 # Toggle to "1" in .env to opt back in when you've validated stability.
 WATERMARK_TEXT = env("WATERMARK_TEXT", "kanz × claude")  # set "" to disable
+WATERMARK_FONT = env("WATERMARK_FONT", "Permanent Marker")  # see font_setup.WATERMARK_FONT_PRESETS
 END_CARD_TEXT = env("END_CARD_TEXT", "")  # static fallback; per-clip cta from
                                           # the LLM beats this. Empty by default
                                           # — pro clips don't need 'follow for

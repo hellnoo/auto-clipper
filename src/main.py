@@ -86,6 +86,7 @@ def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
     # Pull video-level overrides so they apply uniformly to every clip.
     video_row = db.get_video(video_id) or {}
     watermark_override = video_row.get("watermark")
+    watermark_font_override = video_row.get("watermark_font")
     source_stem = Path(source_path).stem
     segments = transcript.get("segments", [])
     for i, clip in enumerate(clips):
@@ -93,6 +94,8 @@ def _analyze_and_render(url: str, source_path: str, transcript: dict) -> int:
         clip = _snap_clip(clip, transcript["words"], segments)
         if watermark_override is not None:
             clip = {**clip, "watermark": watermark_override}
+        if watermark_font_override:
+            clip = {**clip, "watermark_font": watermark_font_override}
         clip_id = db.insert_clip(video_id, i + 1, {**clip, "status": "rendering"})
         try:
             editor.render_clip(source_path, clip, transcript["words"], out)
@@ -110,6 +113,7 @@ def process_url(
     url: str,
     expected_speakers: int | None = None,
     watermark: str | None = None,
+    watermark_font: str | None = None,
 ) -> None:
     db.init()
     fields: dict = {"status": "downloading"}
@@ -117,6 +121,8 @@ def process_url(
         fields["expected_speakers"] = int(expected_speakers)
     if watermark is not None:
         fields["watermark"] = watermark
+    if watermark_font:
+        fields["watermark_font"] = watermark_font
     vid = db.upsert_video(url, **fields)
     try:
         info = downloader.download(url)
@@ -137,6 +143,7 @@ def regenerate_video(
     video_id: int,
     expected_speakers: int | None = None,
     watermark: str | None = None,
+    watermark_font: str | None = None,
 ) -> None:
     """Re-run analyze + render on an existing video using cached source + transcript."""
     db.init()
@@ -153,6 +160,8 @@ def regenerate_video(
         persist["expected_speakers"] = int(expected_speakers)
     if watermark is not None:
         persist["watermark"] = watermark
+    if watermark_font:
+        persist["watermark_font"] = watermark_font
     if persist:
         db.upsert_video(v["url"], **persist)
     effective_speakers = (

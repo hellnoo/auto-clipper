@@ -71,6 +71,7 @@ def _worker() -> None:
             payload = job[1]
             speakers = job[2] if len(job) > 2 else None
             watermark = job[3] if len(job) > 3 else None
+            wm_font = job[4] if len(job) > 4 else None
             label = f"regen vid={payload}" if kind == "regen" else str(payload)
             if speakers:
                 label += f" spk={speakers}"
@@ -79,9 +80,11 @@ def _worker() -> None:
             _current["label"] = label
             logger.info(f"[worker] start {label}")
             if kind == "url":
-                process_url(payload, expected_speakers=speakers, watermark=watermark)  # type: ignore[arg-type]
+                process_url(payload, expected_speakers=speakers,
+                            watermark=watermark, watermark_font=wm_font)  # type: ignore[arg-type]
             elif kind == "regen":
-                regenerate_video(int(payload), expected_speakers=speakers, watermark=watermark)
+                regenerate_video(int(payload), expected_speakers=speakers,
+                                 watermark=watermark, watermark_font=wm_font)
             else:
                 logger.warning(f"[worker] unknown job kind: {kind}")
             logger.success(f"[worker] done {label}")
@@ -330,6 +333,7 @@ PAGE = """<!doctype html>
   <input type="text" name="watermark" maxlength="32" placeholder="@yourname"
          title="Watermark on every clip (your @username). Leave blank for no watermark."
          style="width:140px;padding:12px 14px;background:transparent;border:0;border-left:1px solid var(--border);color:var(--text);font-size:13px;font-family:inherit;outline:none">
+  <select name="wm_font" title="Watermark font style">{wm_font_options_default}</select>
   <select name="speakers" title="Speaker count for diarization (color per speaker)">
    <option value="0">auto speakers</option>
    <option value="1">1 speaker</option>
@@ -652,6 +656,7 @@ def _render_video(v: dict) -> str:
     can_regen = bool(v.get("path")) and Path(v["path"]).exists() if v.get("path") else False
     current_spk = int(v.get("expected_speakers") or 0)
     current_wm = v.get("watermark") or ""
+    current_wm_font = v.get("watermark_font") or ""
     if can_regen:
         opts = []
         for n in range(0, 7):
@@ -659,6 +664,12 @@ def _render_video(v: dict) -> str:
             sel = " selected" if n == current_spk else ""
             opts.append(f'<option value="{n}"{sel}>{label}</option>')
         wm_attr = _esc(current_wm)
+        # Per-video watermark font dropdown
+        from src.font_setup import WATERMARK_FONT_PRESETS
+        wm_font_opts = []
+        for label, (name, _, _) in WATERMARK_FONT_PRESETS.items():
+            sel = " selected" if name == current_wm_font else ""
+            wm_font_opts.append(f'<option value="{_esc(name)}"{sel}>{_esc(label)}</option>')
         regen_btn = (
             f'<form class="regen" method="post" action="/regenerate/{v["id"]}">'
             f'<input type="text" name="watermark" value="{wm_attr}" maxlength="32" '
@@ -666,6 +677,10 @@ def _render_video(v: dict) -> str:
             f'style="padding:5px 8px;background:var(--surface2);color:var(--text);'
             f'border:1px solid var(--border);border-radius:6px;font-size:11px;width:110px;'
             f'font-family:inherit;outline:none">'
+            f'<select name="wm_font" title="Watermark font" '
+            f'style="padding:5px 8px;background:var(--surface2);color:var(--muted);'
+            f'border:1px solid var(--border);border-radius:6px;font-size:11px;'
+            f'font-family:inherit;cursor:pointer">{"".join(wm_font_opts)}</select>'
             f'<select name="speakers" title="Speaker count for diarization">{"".join(opts)}</select>'
             f'<button type="submit" class="btn-regen" '
             f'title="Re-run analyze + render using cached source/transcript">↻ regenerate</button>'
@@ -727,9 +742,17 @@ def index() -> str:
             'style="color:var(--muted);text-decoration:underline dotted">clear history</a>'
         )
 
+    # Build watermark font dropdown options
+    from src.font_setup import WATERMARK_FONT_PRESETS
+    wm_font_options_default = "".join(
+        f'<option value="{_esc(name)}">{_esc(label)}</option>'
+        for label, (name, _, _) in WATERMARK_FONT_PRESETS.items()
+    )
+
     if not videos:
         return PAGE.format(
             queue_info=queue_info,
+            wm_font_options_default=wm_font_options_default,
             body=(
                 '<div class="empty">'
                 '<span class="empty-emoji">🎬</span>'
@@ -737,7 +760,11 @@ def index() -> str:
                 '</div>'
             ),
         )
-    return PAGE.format(queue_info=queue_info, body="".join(_render_video(v) for v in videos))
+    return PAGE.format(
+        queue_info=queue_info,
+        wm_font_options_default=wm_font_options_default,
+        body="".join(_render_video(v) for v in videos),
+    )
 
 
 @app.post("/submit")
@@ -745,14 +772,16 @@ def submit(
     url: str = Form(...),
     speakers: int = Form(0),
     watermark: str = Form(""),
+    wm_font: str = Form(""),
 ) -> RedirectResponse:
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "URL must start with http:// or https://")
     spk = max(0, min(int(speakers or 0), 10)) or None
-    wm = watermark.strip()[:32] if watermark else None  # cap at 32 chars
-    job_queue.put(("url", url, spk, wm))
-    logger.info(f"queued: {url} speakers={spk or 'auto'} watermark={wm!r} (qsize={job_queue.qsize()})")
+    wm = watermark.strip()[:32] if watermark else None
+    wmf = wm_font.strip()[:48] or None
+    job_queue.put(("url", url, spk, wm, wmf))
+    logger.info(f"queued: {url} speakers={spk or 'auto'} watermark={wm!r} font={wmf!r}")
     return RedirectResponse("/", status_code=303)
 
 
@@ -761,6 +790,7 @@ def regenerate(
     video_id: int,
     speakers: int = Form(0),
     watermark: str = Form(""),
+    wm_font: str = Form(""),
 ) -> RedirectResponse:
     v = db.get_video(video_id)
     if not v:
@@ -768,14 +798,13 @@ def regenerate(
     if not v.get("path") or not Path(v["path"]).exists():
         raise HTTPException(409, "source mp4 missing on disk; submit the URL again")
     spk = max(0, min(int(speakers or 0), 10)) or None
-    # Empty form value -> keep existing watermark (don't overwrite to blank).
-    # Use sentinel: dashboard sends '__keep__' when user didn't change the field.
     if watermark == "__keep__":
         wm = None
     else:
         wm = watermark.strip()[:32]
-    job_queue.put(("regen", video_id, spk, wm))
-    logger.info(f"queued regen: video_id={video_id} speakers={spk or 'auto'} watermark={wm!r} (qsize={job_queue.qsize()})")
+    wmf = wm_font.strip()[:48] or None
+    job_queue.put(("regen", video_id, spk, wm, wmf))
+    logger.info(f"queued regen: video_id={video_id} speakers={spk or 'auto'} watermark={wm!r} font={wmf!r}")
     return RedirectResponse("/", status_code=303)
 
 

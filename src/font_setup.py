@@ -16,15 +16,43 @@ from . import config
 
 FONTS_DIR = Path(config.ROOT) / "output" / ".fonts"
 FONTS: dict[str, str] = {
-    # TikTok-classic display font for captions
+    # Display fonts
     "Bangers-Regular.ttf":
         "https://github.com/google/fonts/raw/main/ofl/bangers/Bangers-Regular.ttf",
-    # Handwritten marker style for watermark
-    "PermanentMarker-Regular.ttf":
-        "https://github.com/google/fonts/raw/main/apache/permanentmarker/PermanentMarker-Regular.ttf",
-    # Narrow bold backup for hooks
     "Anton-Regular.ttf":
         "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
+    "Righteous-Regular.ttf":
+        "https://github.com/google/fonts/raw/main/ofl/righteous/Righteous-Regular.ttf",
+    "Bungee-Regular.ttf":
+        "https://github.com/google/fonts/raw/main/ofl/bungee/Bungee-Regular.ttf",
+    # Handwritten / scripty for watermark
+    "PermanentMarker-Regular.ttf":
+        "https://github.com/google/fonts/raw/main/apache/permanentmarker/PermanentMarker-Regular.ttf",
+    "Caveat-Bold.ttf":
+        "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf",
+    "Pacifico-Regular.ttf":
+        "https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf",
+    "Lobster-Regular.ttf":
+        "https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf",
+    # Retro
+    "PressStart2P-Regular.ttf":
+        "https://github.com/google/fonts/raw/main/ofl/pressstart2p/PressStart2P-Regular.ttf",
+}
+
+
+# Mapping from friendly dropdown name to (ASS-fontname, recommended-size, recommended-rotation-deg).
+# ASS-fontname must match what's INSIDE the .ttf 'Name' table — usually the
+# family name without the file extension.
+WATERMARK_FONT_PRESETS: dict[str, tuple[str, int, int]] = {
+    "Permanent Marker (handwritten)": ("Permanent Marker", 80, -8),
+    "Caveat (cursive bold)":           ("Caveat",            96, -6),
+    "Pacifico (flowy script)":         ("Pacifico",          84, -10),
+    "Lobster (elegant script)":        ("Lobster",           90, -7),
+    "Bangers (chunky display)":        ("Bangers",           88, -6),
+    "Anton (narrow bold)":             ("Anton",             92, -8),
+    "Righteous (block display)":       ("Righteous",         84, -5),
+    "Bungee (3D chunky)":              ("Bungee",            78, -4),
+    "Press Start 2P (pixel retro)":    ("Press Start 2P",    52,  0),
 }
 
 

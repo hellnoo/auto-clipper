@@ -90,6 +90,7 @@ def generate_ass(
     emojis: list[dict] | None = None,
     clip_duration: float | None = None,
     watermark: str | None = None,
+    watermark_font: str | None = None,
     cta: str | None = None,
 ) -> None:
     dialogues: list[str] = []
@@ -101,12 +102,29 @@ def generate_ass(
     if wm and wm.strip():
         wm_text = _escape_ass_text(wm.strip())
         wm_end = clip_duration if clip_duration else 9999.0
-        # Centered, transparent, slight tilt — like a photo watermark stamp.
-        # \an5\pos(540,1620) anchors center at lower-mid of frame (above
-        # bottom UI but below hook). \frz=-8 gives subtle handwritten tilt.
+        # Resolve font + sizing from preset (per-call beats env beats default).
+        from . import font_setup
+        fname = (watermark_font or config.WATERMARK_FONT or "Permanent Marker").strip()
+        # Try to find a preset matching this font; otherwise reasonable defaults.
+        preset = next(
+            (v for v in font_setup.WATERMARK_FONT_PRESETS.values() if v[0] == fname),
+            (fname, 80, -8),
+        )
+        ass_font, fs, frz = preset
+        # True-center: y=960 is the exact middle of 1920 in 9:16. Anti-crop —
+        # any platform that crops top or bottom strips still keeps the watermark.
+        # Alpha &HC0 ≈ 25% opaque — visible but doesn't fight the speaker's face.
+        # Backslashes inside an f-string are escaped as \\ so libass sees a
+        # single backslash.
         dialogues.append(
             f"Dialogue: 0,{_ass_time(HOOK_DURATION + 0.2)},{_ass_time(wm_end)},Watermark,,0,0,0,,"
-            + r"{\fad(400,300)\an5\pos(540,1620)\frz-8}" + wm_text
+            + (
+                r"{\fad(500,400)\an5\pos(540,960)"
+                + rf"\fn{ass_font}\fs{fs}\frz{frz}"
+                + r"\1a&HC0&\3a&HC0&"   # primary + outline alpha both ~25% opaque
+                + r"}"
+            )
+            + wm_text
         )
 
     if hook:
@@ -582,6 +600,7 @@ def render_clip(source_path: str, clip: dict, words: list[dict], out_path: Path)
         emojis=clip.get("emojis"),
         clip_duration=out_dur,
         watermark=clip.get("watermark"),
+        watermark_font=clip.get("watermark_font"),
         cta=clip.get("cta"),
     )
 
